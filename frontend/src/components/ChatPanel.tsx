@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from "react";
-import { sendMessage } from "../lib/api.js";
-import MessageBubble from "./MessageBubble.jsx";
+import { useSendMessage } from "../hooks/useSendMessage";
+import MessageBubble from "./MessageBubble";
+import type { ChatBubble } from "../lib/types";
 
 const SUGGESTIONS = [
   "What's on the menu?",
@@ -9,46 +10,52 @@ const SUGGESTIONS = [
   "What time do you close?",
 ];
 
-export default function ChatPanel({ conversationId }) {
-  const [messages, setMessages] = useState([]);
+interface ChatPanelProps {
+  conversationId: string | null;
+}
+
+export default function ChatPanel({ conversationId }: ChatPanelProps) {
+  const [messages, setMessages] = useState<ChatBubble[]>([]);
   const [input, setInput] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const bottomRef = useRef(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const { mutate: send, isPending } = useSendMessage();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isSending]);
+  }, [messages, isPending]);
 
-  async function handleSend(text) {
+  function handleSend(text: string) {
     const content = text.trim();
-    if (!content || !conversationId || isSending) return;
+    if (!content || !conversationId || isPending) return;
 
     setMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
-    setIsSending(true);
 
-    try {
-      const reply = await sendMessage(conversationId, content);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: reply.content,
-          toolUsed: reply.tool_used,
+    send(
+      { conversationId, content },
+      {
+        onSuccess: (reply) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: reply.content,
+              toolUsed: reply.tool_used,
+            },
+          ]);
         },
-      ]);
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Something went wrong talking to the assistant: ${err.message}`,
-          isError: true,
+        onError: (err) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content: `Something went wrong talking to the assistant: ${err.message}`,
+              isError: true,
+            },
+          ]);
         },
-      ]);
-    } finally {
-      setIsSending(false);
-    }
+      }
+    );
   }
 
   return (
@@ -82,7 +89,7 @@ export default function ChatPanel({ conversationId }) {
             />
           ))
         )}
-        {isSending ? (
+        {isPending ? (
           <div className="flex justify-start">
             <div className="rounded-2xl border border-stone-200 bg-white px-4 py-2 text-sm text-stone-400 shadow-sm">
               thinking…
@@ -110,7 +117,7 @@ export default function ChatPanel({ conversationId }) {
         />
         <button
           type="submit"
-          disabled={!conversationId || isSending || !input.trim()}
+          disabled={!conversationId || isPending || !input.trim()}
           className="rounded-full bg-amber-700 px-5 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-stone-300"
         >
           Send

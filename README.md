@@ -11,7 +11,7 @@ that decides which restaurant action to take based on a guest's message.
 - Docker / docker-compose
 - LangChain (`create_tool_calling_agent` + `AgentExecutor`)
 - Anthropic Claude (via `langchain-anthropic`)
-- React + Vite + Tailwind (chat UI)
+- React + TypeScript + Vite + Tailwind (chat UI)
 
 ## How it works
 

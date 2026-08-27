@@ -1,29 +1,30 @@
-import { useEffect, useState } from "react";
-import { getMenu } from "../lib/api.js";
+import { useMenu } from "../hooks/useMenu";
+import type { MenuCategory, MenuItem } from "../lib/types";
 
-const CATEGORY_LABELS = {
+const CATEGORY_LABELS: Record<MenuCategory, string> = {
   appetizer: "Appetizers",
   main: "Mains",
   dessert: "Desserts",
   drink: "Drinks",
 };
 
-const CATEGORY_ORDER = ["appetizer", "main", "dessert", "drink"];
+const CATEGORY_ORDER: MenuCategory[] = [
+  "appetizer",
+  "main",
+  "dessert",
+  "drink",
+];
 
 export default function MenuPanel() {
-  const [menu, setMenu] = useState(null);
-  const [error, setError] = useState(null);
+  const { data: menu, isLoading, error } = useMenu();
 
-  useEffect(() => {
-    getMenu()
-      .then(setMenu)
-      .catch((err) => setError(err.message));
-  }, []);
-
-  const grouped = (menu || []).reduce((acc, item) => {
-    (acc[item.category] ||= []).push(item);
-    return acc;
-  }, {});
+  const grouped = (menu ?? []).reduce<Partial<Record<MenuCategory, MenuItem[]>>>(
+    (acc, item) => {
+      (acc[item.category] ??= []).push(item);
+      return acc;
+    },
+    {}
+  );
 
   return (
     <div className="h-full overflow-y-auto p-4">
@@ -32,8 +33,10 @@ export default function MenuPanel() {
       </h2>
 
       {error ? (
-        <p className="text-sm text-red-600">Couldn't load menu: {error}</p>
-      ) : !menu ? (
+        <p className="text-sm text-red-600">
+          Couldn't load menu: {error.message}
+        </p>
+      ) : isLoading ? (
         <p className="text-sm text-stone-400">Loading…</p>
       ) : (
         <div className="space-y-5">
@@ -43,7 +46,7 @@ export default function MenuPanel() {
                 {CATEGORY_LABELS[category] || category}
               </h3>
               <ul className="space-y-2">
-                {grouped[category].map((item) => (
+                {grouped[category]?.map((item) => (
                   <li
                     key={item.id}
                     className={`rounded-lg border border-stone-200 bg-white p-2 ${

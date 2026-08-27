@@ -1,4 +1,16 @@
-export default function MessageBubble({ role, content, toolUsed, isError }) {
+interface MessageBubbleProps {
+  role: "user" | "assistant";
+  content: string;
+  toolUsed?: string;
+  isError?: boolean;
+}
+
+export default function MessageBubble({
+  role,
+  content,
+  toolUsed,
+  isError,
+}: MessageBubbleProps) {
   const isUser = role === "user";
 
   return (

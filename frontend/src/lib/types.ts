@@ -1,0 +1,32 @@
+export type MessageRole = "user" | "assistant";
+
+export interface Conversation {
+  id: string;
+  created_at: string;
+}
+
+export interface Message {
+  id: number;
+  role: MessageRole;
+  content: string;
+  tool_used: string;
+  created_at: string;
+}
+
+export type MenuCategory = "appetizer" | "main" | "dessert" | "drink";
+
+export interface MenuItem {
+  id: number;
+  name: string;
+  description: string;
+  category: MenuCategory;
+  price: string;
+  is_available: boolean;
+}
+
+export interface ChatBubble {
+  role: MessageRole;
+  content: string;
+  toolUsed?: string;
+  isError?: boolean;
+}
