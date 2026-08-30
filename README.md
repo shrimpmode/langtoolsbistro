@@ -118,6 +118,39 @@ Browse the seeded menu directly:
 curl localhost:8010/api/menu/
 ```
 
+## Testing & evals
+
+Two separate layers, on purpose — they check different things and have very
+different cost/speed profiles:
+
+**Unit tests** (`chat/tests/`) — free, fast, deterministic. Cover the tool
+functions (`list_menu`, `create_reservation`, `check_reservation`) against a
+real test database, the API views (with the agent mocked out), and the
+orchestrator glue code (history conversion, result unpacking). Run:
+
+```bash
+docker compose exec web python manage.py test
+```
+
+**Evals** (`chat/agent/eval_cases.py`, run via `manage.py run_evals`) — make
+real, billed calls to the Claude API through the actual agent, so they check
+judgment: did it pick the right tool for the message, extract the right
+arguments, and answer directly when no tool was needed. They do not run as
+part of `manage.py test` and are not part of CI — run them manually after
+changing the system prompt, tools, or model:
+
+```bash
+docker compose exec web python manage.py run_evals
+docker compose exec web python manage.py run_evals --case create_reservation_extracts_all_fields
+```
+
+Any DB rows a case's setup creates (seeded menu items, a seeded reservation)
+are rolled back at the end of the run via an outer transaction, so this is
+safe to run against a real database — nothing an eval creates persists. Note
+that eval cases run inside that same transaction as whatever's already in
+the database, so pre-existing rows (e.g. from manual testing) are visible to
+the model during a run even though the eval's own writes don't stick around.
+
 ## Notes
 
 - No authentication — this is a local learning demo.
