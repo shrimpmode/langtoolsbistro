@@ -65,3 +65,83 @@ def run_agent(user_input: str, prior_messages) -> dict:
         tool_used = first_action.tool
 
     return {"reply": result["output"], "tool_used": tool_used}
+
+
+def _text_from_chunk_content(content) -> str:
+    """Pull visible text out of one streamed AIMessageChunk's `.content`.
+
+    Anthropic streams content as a list of typed blocks (text, tool_use,
+    and - when the model thinks - thinking), so this filters to `text`
+    blocks only. That also protects against ever streaming a thinking
+    block's contents to the client.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
+async def stream_agent_reply(user_input: str, prior_messages):
+    """Run the agent for one turn, yielding incremental events as they occur.
+
+    Yields dicts of the form {"type": "token" | "tool_start" | "done", ...}.
+    A "done" event is always yielded last, with the same shape run_agent
+    returns (reply/tool_used/tool_input), for the caller to persist.
+
+    Every generated token is streamed live as it arrives, including a "let
+    me check that for you" preamble the model writes before deciding to call
+    a tool - once a token has gone out over SSE there's no taking it back,
+    so this doesn't try to guess in advance whether the current turn will
+    end up calling a tool.
+
+    What DOES get filtered is the *persisted* reply (the "done" event, and
+    what the caller saves to the DB): only text from a turn whose final
+    message has no tool_calls counts as the model's actual answer - which
+    is decided retroactively at on_chat_model_end, matching what
+    run_agent's non-streaming AgentFinish output would have contained. A
+    tool-decision preamble is real-time flavor text, not part of the
+    answer, and dropping it here keeps the streamed and non-streamed code
+    paths agreeing on what "the reply" was for a given turn.
+    """
+    executor = _build_agent_executor()
+    chat_history = _history_to_messages(prior_messages)
+
+    tool_used = ""
+    tool_input = {}
+    turn_buffer = []
+    final_reply_parts = []
+
+    async for event in executor.astream_events(
+        {"input": user_input, "chat_history": chat_history}, version="v2"
+    ):
+        kind = event["event"]
+
+        if kind == "on_chat_model_start":
+            turn_buffer = []
+
+        elif kind == "on_chat_model_stream":
+            text = _text_from_chunk_content(event["data"]["chunk"].content)
+            if text:
+                turn_buffer.append(text)
+                yield {"type": "token", "text": text}
+
+        elif kind == "on_chat_model_end":
+            if not event["data"]["output"].tool_calls:
+                final_reply_parts.extend(turn_buffer)
+
+        elif kind == "on_tool_start":
+            tool_used = event["name"]
+            tool_input = event["data"].get("input", {})
+            yield {"type": "tool_start", "tool": tool_used}
+
+    yield {
+        "type": "done",
+        "reply": "".join(final_reply_parts),
+        "tool_used": tool_used,
+        "tool_input": tool_input,
+    }
