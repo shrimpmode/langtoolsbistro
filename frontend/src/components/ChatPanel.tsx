@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from "react";
-import { useSendMessage } from "../hooks/useSendMessage";
+import { useStreamMessage } from "../hooks/useStreamMessage";
 import MessageBubble from "./MessageBubble";
 import type { ChatBubble } from "../lib/types";
 
@@ -18,44 +18,43 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatBubble[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { mutate: send, isPending } = useSendMessage();
+  const { send, isStreaming, streamedText, streamingTool } = useStreamMessage();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isPending]);
+  }, [messages, isStreaming, streamedText]);
 
   function handleSend(text: string) {
     const content = text.trim();
-    if (!content || !conversationId || isPending) return;
+    if (!content || !conversationId || isStreaming) return;
 
     setMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
 
-    send(
-      { conversationId, content },
-      {
-        onSuccess: (reply) => {
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: reply.content,
-              toolUsed: reply.tool_used,
-            },
-          ]);
-        },
-        onError: (err) => {
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: "assistant",
-              content: `Something went wrong talking to the assistant: ${err.message}`,
-              isError: true,
-            },
-          ]);
-        },
-      }
-    );
+    send({
+      conversationId,
+      content,
+      onDone: (reply) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: reply.content,
+            toolUsed: reply.tool_used,
+          },
+        ]);
+      },
+      onError: (err) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `Something went wrong talking to the assistant: ${err.message}`,
+            isError: true,
+          },
+        ]);
+      },
+    });
   }
 
   return (
@@ -89,12 +88,20 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
             />
           ))
         )}
-        {isPending ? (
-          <div className="flex justify-start">
-            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-2 text-sm text-stone-400 shadow-sm">
-              thinking…
+        {isStreaming ? (
+          streamedText ? (
+            <MessageBubble
+              role="assistant"
+              content={streamedText}
+              toolUsed={streamingTool ?? undefined}
+            />
+          ) : (
+            <div className="flex justify-start">
+              <div className="rounded-2xl border border-stone-200 bg-white px-4 py-2 text-sm text-stone-400 shadow-sm">
+                {streamingTool ? `🔧 ${streamingTool}…` : "thinking…"}
+              </div>
             </div>
-          </div>
+          )
         ) : null}
         <div ref={bottomRef} />
       </div>
@@ -117,7 +124,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
         />
         <button
           type="submit"
-          disabled={!conversationId || isPending || !input.trim()}
+          disabled={!conversationId || isStreaming || !input.trim()}
           className="rounded-full bg-amber-700 px-5 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-stone-300"
         >
           Send
