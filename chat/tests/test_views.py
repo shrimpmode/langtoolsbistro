@@ -3,12 +3,15 @@
 run_agent is mocked here - these test persistence and HTTP contract
 (status codes, payload shape, ordering), not agent behavior.
 """
+import json
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.http import Http404
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from chat.models import Conversation, Message
+from chat.views import stream_message
 
 
 class ConversationCreateViewTests(TestCase):
@@ -112,3 +115,92 @@ class MessageListCreateViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([m["content"] for m in response.data], ["first", "second"])
         mock_run_agent.assert_not_called()
+
+
+def _fake_stream(*events):
+    """Async-generator test double for stream_agent_reply, usable as a
+    mock's side_effect (called with the same args stream_agent_reply is)."""
+
+    async def gen(user_input, prior_messages):
+        for event in events:
+            yield event
+
+    return gen
+
+
+class StreamMessageViewTests(TestCase):
+    """stream_message is called directly (bypassing the URL dispatcher) since
+    it's a plain async view function - Django's docs recommend awaiting it
+    directly in tests rather than going through the sync test client, which
+    doesn't handle async streaming responses.
+    """
+
+    def setUp(self):
+        self.conversation = Conversation.objects.create()
+        self.factory = RequestFactory()
+        self.url = reverse("message-stream", kwargs={"conversation_id": self.conversation.id})
+
+    def _post(self, content):
+        return self.factory.post(
+            self.url, data=json.dumps({"content": content}), content_type="application/json"
+        )
+
+    async def _body(self, response):
+        chunks = [chunk async for chunk in response.streaming_content]
+        return b"".join(chunks).decode()
+
+    @patch("chat.views.stream_agent_reply")
+    async def test_streams_events_and_persists_the_final_message(self, mock_stream):
+        mock_stream.side_effect = _fake_stream(
+            {"type": "token", "text": "Here's "},
+            {"type": "token", "text": "our menu."},
+            {"type": "tool_start", "tool": "list_menu"},
+            {
+                "type": "done",
+                "reply": "Here's our menu.",
+                "tool_used": "list_menu",
+                "tool_input": {},
+            },
+        )
+
+        response = await stream_message(self._post("What's on the menu?"), self.conversation.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/event-stream")
+
+        body = await self._body(response)
+        self.assertIn("event: token", body)
+        self.assertIn("event: tool_start", body)
+        self.assertIn("event: done", body)
+
+        assistant_message = await Message.objects.aget(role=Message.Role.ASSISTANT)
+        self.assertEqual(assistant_message.content, "Here's our menu.")
+        self.assertEqual(assistant_message.tool_used, "list_menu")
+
+        user_message = await Message.objects.aget(role=Message.Role.USER)
+        self.assertEqual(user_message.content, "What's on the menu?")
+
+    @patch("chat.views.stream_agent_reply")
+    async def test_agent_failure_mid_stream_yields_error_event(self, mock_stream):
+        async def failing_gen(user_input, prior_messages):
+            yield {"type": "token", "text": "Uh"}
+            raise RuntimeError("boom")
+
+        mock_stream.side_effect = failing_gen
+
+        response = await stream_message(self._post("hi"), self.conversation.id)
+        body = await self._body(response)
+
+        self.assertIn("event: error", body)
+        self.assertFalse(
+            await Message.objects.filter(role=Message.Role.ASSISTANT).aexists()
+        )
+
+    async def test_blank_content_is_rejected(self):
+        response = await stream_message(self._post(""), self.conversation.id)
+        self.assertEqual(response.status_code, 400)
+
+    async def test_missing_conversation_raises_404(self):
+        bad_id = "00000000-0000-0000-0000-000000000000"
+        with self.assertRaises(Http404):
+            await stream_message(self._post("hi"), bad_id)

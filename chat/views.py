@@ -1,4 +1,5 @@
 import json
+import logging
 
 from django.http import Http404, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -14,6 +15,8 @@ from .serializers import (
     MessageCreateSerializer,
     MessageSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationCreateView(APIView):
@@ -89,19 +92,30 @@ async def stream_message(request, conversation_id):
     )
 
     async def event_stream():
-        async for event in stream_agent_reply(user_content, prior_messages):
-            if event["type"] != "done":
-                yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
-                continue
+        # Headers are already sent by the time an error can happen here, so
+        # there's no HTTP status left to signal failure with - an `error`
+        # SSE event is the only way to tell the client the turn didn't
+        # finish. No assistant message is persisted in that case.
+        try:
+            async for event in stream_agent_reply(user_content, prior_messages):
+                if event["type"] != "done":
+                    yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                    continue
 
-            assistant_message = await Message.objects.acreate(
-                conversation=conversation,
-                role=Message.Role.ASSISTANT,
-                content=event["reply"],
-                tool_used=event["tool_used"],
+                assistant_message = await Message.objects.acreate(
+                    conversation=conversation,
+                    role=Message.Role.ASSISTANT,
+                    content=event["reply"],
+                    tool_used=event["tool_used"],
+                )
+                payload = MessageSerializer(assistant_message).data
+                yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+        except Exception:
+            logger.exception(
+                "Streaming agent reply failed for conversation %s", conversation_id
             )
-            payload = MessageSerializer(assistant_message).data
-            yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+            error_payload = {"detail": "Something went wrong talking to the assistant."}
+            yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
 
     response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"
