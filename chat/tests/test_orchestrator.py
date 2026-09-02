@@ -6,12 +6,19 @@ network access and no Anthropic API key - they test our glue code
 agent actually picks the right tool for a given message is what the evals
 in chat/agent/eval_cases.py + `manage.py run_evals` check instead.
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 from langchain_core.messages import AIMessage, HumanMessage
 
-from chat.agent.orchestrator import _extract_reply_text, _history_to_messages, run_agent
+from chat.agent.orchestrator import (
+    _extract_reply_text,
+    _history_to_messages,
+    _text_from_chunk_content,
+    run_agent,
+    stream_agent_reply,
+)
 
 
 class HistoryToMessagesTests(SimpleTestCase):
@@ -93,3 +100,110 @@ class RunAgentTests(SimpleTestCase):
         self.assertEqual(call_kwargs["input"], "follow-up")
         self.assertEqual(len(call_kwargs["chat_history"]), 1)
         self.assertIsInstance(call_kwargs["chat_history"][0], HumanMessage)
+
+
+class TextFromChunkContentTests(SimpleTestCase):
+    def test_plain_string_chunk(self):
+        self.assertEqual(_text_from_chunk_content("hi"), "hi")
+
+    def test_filters_out_non_text_blocks(self):
+        content = [
+            {"type": "thinking", "thinking": "the user wants hours"},
+            {"type": "text", "text": "We're open 5-10pm."},
+        ]
+        self.assertEqual(_text_from_chunk_content(content), "We're open 5-10pm.")
+
+    def test_unrecognized_content_returns_empty_string(self):
+        self.assertEqual(_text_from_chunk_content(None), "")
+
+
+async def _fake_events(*event_batches):
+    """Async-generator test double for AgentExecutor.astream_events.
+
+    Each item in event_batches is already a full {"event": ..., "data":
+    ...} dict, yielded in order.
+    """
+    for event in event_batches:
+        yield event
+
+
+class StreamAgentReplyTests(SimpleTestCase):
+    @patch("chat.agent.orchestrator._build_agent_executor")
+    async def test_direct_answer_streams_tokens_and_persists_full_reply(self, mock_build):
+        mock_executor = MagicMock()
+        mock_executor.astream_events.return_value = _fake_events(
+            {"event": "on_chat_model_start", "data": {}},
+            {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="We're open ")},
+            },
+            {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="5-10pm.")},
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": SimpleNamespace(tool_calls=[])},
+            },
+        )
+        mock_build.return_value = mock_executor
+
+        events = [e async for e in stream_agent_reply("What are your hours?", [])]
+
+        token_events = [e for e in events if e["type"] == "token"]
+        self.assertEqual([e["text"] for e in token_events], ["We're open ", "5-10pm."])
+
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["reply"], "We're open 5-10pm.")
+        self.assertEqual(done["tool_used"], "")
+        self.assertEqual(done["tool_input"], {})
+
+    @patch("chat.agent.orchestrator._build_agent_executor")
+    async def test_tool_call_preamble_is_streamed_but_not_persisted(self, mock_build):
+        mock_executor = MagicMock()
+        mock_executor.astream_events.return_value = _fake_events(
+            {"event": "on_chat_model_start", "data": {}},
+            {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="Let me check that. ")},
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": SimpleNamespace(tool_calls=[{"name": "list_menu"}])},
+            },
+            {
+                "event": "on_tool_start",
+                "name": "list_menu",
+                "data": {"input": {"category": "dessert"}},
+            },
+            {"event": "on_chat_model_start", "data": {}},
+            {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": SimpleNamespace(content="Here's our dessert menu.")},
+            },
+            {
+                "event": "on_chat_model_end",
+                "data": {"output": SimpleNamespace(tool_calls=[])},
+            },
+        )
+        mock_build.return_value = mock_executor
+
+        events = [e async for e in stream_agent_reply("Any desserts?", [])]
+
+        # Both the preamble and the final answer are streamed live as tokens.
+        token_events = [e for e in events if e["type"] == "token"]
+        self.assertEqual(
+            [e["text"] for e in token_events],
+            ["Let me check that. ", "Here's our dessert menu."],
+        )
+
+        tool_start_events = [e for e in events if e["type"] == "tool_start"]
+        self.assertEqual(tool_start_events, [{"type": "tool_start", "tool": "list_menu"}])
+
+        # But the preamble is dropped from what's persisted - only the reply
+        # from the turn that didn't end in a tool call counts.
+        done = events[-1]
+        self.assertEqual(done["reply"], "Here's our dessert menu.")
+        self.assertEqual(done["tool_used"], "list_menu")
+        self.assertEqual(done["tool_input"], {"category": "dessert"})

@@ -106,6 +106,18 @@ curl -X POST localhost:8010/api/conversations/<conversation_id>/messages/ \
   -d '{"content": "What time do you close?"}'
 ```
 
+Ask about the menu with the response streamed token-by-token over SSE
+instead of waiting for the full reply (what the UI itself uses):
+
+```bash
+curl -N -X POST localhost:8010/api/conversations/<conversation_id>/messages/stream/ \
+  -H "Content-Type: application/json" \
+  -d '{"content": "What'\''s on the menu?"}'
+# => a stream of `event: token`/`event: tool_start` frames, ending in one
+#    `event: done` frame with the persisted assistant message (or, on
+#    failure, an `event: error` frame instead)
+```
+
 View full history:
 
 ```bash
