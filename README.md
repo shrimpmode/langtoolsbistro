@@ -9,7 +9,7 @@ that decides which restaurant action to take based on a guest's message.
 - Django + Django REST Framework
 - PostgreSQL
 - Docker / docker-compose
-- LangChain (`create_tool_calling_agent` + `AgentExecutor`)
+- LangChain (`create_agent`)
 - Anthropic Claude (via `langchain-anthropic`)
 - React + TypeScript + Vite + Tailwind (chat UI)
 
