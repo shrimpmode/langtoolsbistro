@@ -1,8 +1,7 @@
 from django.conf import settings
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain.agents import create_agent
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from .tools import TOOLS
 
@@ -19,31 +18,33 @@ an existing reservation. For anything else (hours, location, general \
 questions, small talk), just answer directly. Keep replies short and \
 friendly, like a real host would speak."""
 
+_agent = None
 
-def _build_agent_executor() -> AgentExecutor:
-    llm = ChatAnthropic(
-        model=settings.ANTHROPIC_MODEL,
-        api_key=settings.ANTHROPIC_API_KEY,
-    )
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder("agent_scratchpad"),
-        ]
-    )
-    agent = create_tool_calling_agent(llm, TOOLS, prompt)
-    return AgentExecutor(agent=agent, tools=TOOLS, return_intermediate_steps=True)
+
+def _get_agent():
+    """Build the agent once and reuse it across turns.
+
+    Unlike the old AgentExecutor, a create_agent graph holds no per-turn
+    state of its own - all of that lives in the messages list passed to
+    invoke()/astream_events() - so it's safe to build once and share across
+    requests instead of reconstructing it every call.
+    """
+    global _agent
+    if _agent is None:
+        llm = ChatAnthropic(
+            model=settings.ANTHROPIC_MODEL,
+            api_key=settings.ANTHROPIC_API_KEY,
+        )
+        _agent = create_agent(model=llm, tools=TOOLS, system_prompt=SYSTEM_PROMPT)
+    return _agent
 
 
 def _extract_reply_text(output) -> str:
-    """Normalize the agent's final output to plain text.
+    """Normalize the agent's final message content to plain text.
 
-    Claude Opus 5 thinks by default, so a turn's underlying AIMessage often
-    has non-string content: a list of blocks (thinking, text, ...) instead
-    of a single string. LangChain's tool-calling output parser passes that
-    list straight through as `output`, so we can't assume it's a string.
+    Claude Opus 5 thinks by default, so a turn's final AIMessage often has
+    non-string content: a list of blocks (thinking, text, ...) instead of a
+    single string.
     """
     if isinstance(output, str):
         return output
@@ -65,26 +66,32 @@ def _history_to_messages(messages):
 
 
 def run_agent(user_input: str, prior_messages) -> dict:
-    """Run the LangChain tool-calling agent for one turn.
+    """Run the LangChain agent for one turn.
 
     Returns a dict with the assistant's reply text, the name of the tool it
     invoked (empty string if it answered directly), and the input passed to
     that tool (empty dict if none).
     """
-    executor = _build_agent_executor()
-    chat_history = _history_to_messages(prior_messages)
+    agent = _get_agent()
+    input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
 
-    result = executor.invoke({"input": user_input, "chat_history": chat_history})
+    result = agent.invoke({"messages": input_messages})
+
+    # Everything at or after this index is new this turn - input_messages is
+    # itself a prefix of result["messages"], since create_agent appends
+    # rather than replacing.
+    new_messages = result["messages"][len(input_messages):]
 
     tool_used = ""
     tool_input = {}
-    intermediate_steps = result.get("intermediate_steps", [])
-    if intermediate_steps:
-        first_action, _ = intermediate_steps[0]
-        tool_used = first_action.tool
-        tool_input = first_action.tool_input
+    for msg in new_messages:
+        if getattr(msg, "tool_calls", None):
+            first_call = msg.tool_calls[0]
+            tool_used = first_call["name"]
+            tool_input = first_call["args"]
+            break
 
-    reply = _extract_reply_text(result["output"])
+    reply = _extract_reply_text(result["messages"][-1].content)
 
     return {"reply": reply, "tool_used": tool_used, "tool_input": tool_input}
 
@@ -122,25 +129,23 @@ async def stream_agent_reply(user_input: str, prior_messages):
     end up calling a tool.
 
     What DOES get filtered is the *persisted* reply (the "done" event, and
-    what the caller saves to the DB): only text from a turn whose final
-    message has no tool_calls counts as the model's actual answer - which
-    is decided retroactively at on_chat_model_end, matching what
-    run_agent's non-streaming AgentFinish output would have contained. A
-    tool-decision preamble is real-time flavor text, not part of the
-    answer, and dropping it here keeps the streamed and non-streamed code
-    paths agreeing on what "the reply" was for a given turn.
+    what the caller saves to the DB): only text from a model call whose
+    final message has no tool_calls counts as the model's actual answer -
+    which is decided retroactively at on_chat_model_end, matching what
+    run_agent's last message would have contained. A tool-decision preamble
+    is real-time flavor text, not part of the answer, and dropping it here
+    keeps the streamed and non-streamed code paths agreeing on what "the
+    reply" was for a given turn.
     """
-    executor = _build_agent_executor()
-    chat_history = _history_to_messages(prior_messages)
+    agent = _get_agent()
+    input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
 
     tool_used = ""
     tool_input = {}
     turn_buffer = []
     final_reply_parts = []
 
-    async for event in executor.astream_events(
-        {"input": user_input, "chat_history": chat_history}, version="v2"
-    ):
+    async for event in agent.astream_events({"messages": input_messages}, version="v2"):
         kind = event["event"]
 
         if kind == "on_chat_model_start":
