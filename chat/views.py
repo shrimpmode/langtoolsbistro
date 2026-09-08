@@ -8,12 +8,35 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .agent.orchestrator import run_agent, stream_agent_reply
-from .models import Conversation, Message
+from .models import AgentRun, Conversation, Message
 from .serializers import (
     ConversationSerializer,
     MessageCreateSerializer,
     MessageSerializer,
 )
+
+
+def _agent_run_fields(conversation, user_message, assistant_message, result):
+    """Map an orchestrator result dict onto AgentRun's fields.
+
+    Shared by both endpoints since run_agent and stream_agent_reply's "done"
+    event return the same monitoring shape.
+    """
+    return dict(
+        conversation=conversation,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        model_name=result["model"],
+        status=AgentRun.Status.ERROR if result["error"] else AgentRun.Status.OK,
+        error_message=result["error"] or "",
+        latency_ms=result["latency_ms"],
+        model_call_count=result["model_call_count"],
+        input_tokens=result["input_tokens"],
+        output_tokens=result["output_tokens"],
+        total_tokens=result["total_tokens"],
+        estimated_cost_usd=result["estimated_cost_usd"],
+        tool_calls=result["tool_calls"],
+    )
 
 
 class ConversationCreateView(APIView):
@@ -37,18 +60,30 @@ class MessageListCreateView(APIView):
         user_content = serializer.validated_data["content"]
 
         prior_messages = list(conversation.messages.all())
-        Message.objects.create(
+        user_message = Message.objects.create(
             conversation=conversation, role=Message.Role.USER, content=user_content
         )
 
         result = run_agent(user_content, prior_messages)
 
-        assistant_message = Message.objects.create(
-            conversation=conversation,
-            role=Message.Role.ASSISTANT,
-            content=result["reply"],
-            tool_used=result["tool_used"],
+        assistant_message = None
+        if result["error"] is None:
+            assistant_message = Message.objects.create(
+                conversation=conversation,
+                role=Message.Role.ASSISTANT,
+                content=result["reply"],
+                tool_used=result["tool_used"],
+            )
+
+        AgentRun.objects.create(
+            **_agent_run_fields(conversation, user_message, assistant_message, result)
         )
+
+        if result["error"] is not None:
+            return Response(
+                {"detail": "The assistant hit an error processing that message."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         return Response(
             MessageSerializer(assistant_message).data, status=status.HTTP_201_CREATED
@@ -84,7 +119,7 @@ async def stream_message(request, conversation_id):
         return JsonResponse({"content": ["This field may not be blank."]}, status=400)
 
     prior_messages = [m async for m in conversation.messages.all()]
-    await Message.objects.acreate(
+    user_message = await Message.objects.acreate(
         conversation=conversation, role=Message.Role.USER, content=user_content
     )
 
@@ -94,12 +129,24 @@ async def stream_message(request, conversation_id):
                 yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
                 continue
 
-            assistant_message = await Message.objects.acreate(
-                conversation=conversation,
-                role=Message.Role.ASSISTANT,
-                content=event["reply"],
-                tool_used=event["tool_used"],
+            assistant_message = None
+            if event["error"] is None:
+                assistant_message = await Message.objects.acreate(
+                    conversation=conversation,
+                    role=Message.Role.ASSISTANT,
+                    content=event["reply"],
+                    tool_used=event["tool_used"],
+                )
+
+            await AgentRun.objects.acreate(
+                **_agent_run_fields(conversation, user_message, assistant_message, event)
             )
+
+            if event["error"] is not None:
+                error_payload = {"detail": "The assistant hit an error processing that message."}
+                yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
+                continue
+
             payload = MessageSerializer(assistant_message).data
             yield f"event: done\ndata: {json.dumps(payload)}\n\n"
 

@@ -55,6 +55,10 @@ export function useStreamMessage() {
             setState(initialState);
             onDone(message);
           },
+          onError: (err) => {
+            setState(initialState);
+            onError(err);
+          },
         },
         controller.signal
       ).catch((err: Error) => {

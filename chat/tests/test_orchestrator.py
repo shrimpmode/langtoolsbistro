@@ -91,6 +91,51 @@ class RunAgentTests(SimpleTestCase):
         self.assertEqual(result["tool_input"], {"category": "dessert"})
 
     @patch("chat.agent.orchestrator._get_agent")
+    def test_reports_model_call_count_and_token_usage(self, mock_get_agent):
+        mock_agent = MagicMock()
+        tool_call_message = AIMessage(
+            content="",
+            tool_calls=[{"name": "list_menu", "args": {}, "id": "call_1"}],
+            usage_metadata={"input_tokens": 50, "output_tokens": 10, "total_tokens": 60},
+        )
+        final_message = AIMessage(
+            content="Here you go.",
+            tool_calls=[],
+            usage_metadata={"input_tokens": 70, "output_tokens": 20, "total_tokens": 90},
+        )
+        mock_agent.invoke.return_value = {
+            "messages": [
+                HumanMessage(content="Any desserts?"),
+                tool_call_message,
+                ToolMessage(content="Tiramisu", tool_call_id="call_1"),
+                final_message,
+            ]
+        }
+        mock_get_agent.return_value = mock_agent
+
+        result = run_agent("Any desserts?", [])
+
+        self.assertEqual(result["model_call_count"], 2)
+        self.assertEqual(result["input_tokens"], 120)
+        self.assertEqual(result["output_tokens"], 30)
+        self.assertEqual(result["total_tokens"], 150)
+        self.assertEqual(result["tool_calls"], [{"name": "list_menu", "args": {}}])
+        self.assertIsNone(result["error"])
+
+    @patch("chat.agent.orchestrator._get_agent")
+    def test_agent_exception_is_returned_as_an_error_result_not_raised(self, mock_get_agent):
+        mock_agent = MagicMock()
+        mock_agent.invoke.side_effect = RuntimeError("upstream is down")
+        mock_get_agent.return_value = mock_agent
+
+        result = run_agent("Any desserts?", [])
+
+        self.assertEqual(result["error"], "upstream is down")
+        self.assertEqual(result["reply"], "")
+        self.assertEqual(result["model_call_count"], 0)
+        self.assertGreaterEqual(result["latency_ms"], 0)
+
+    @patch("chat.agent.orchestrator._get_agent")
     def test_passes_converted_history_and_input_to_agent(self, mock_get_agent):
         mock_agent = MagicMock()
         mock_agent.invoke.return_value = {
