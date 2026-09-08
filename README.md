@@ -49,6 +49,12 @@ and the assistant's response records which tool (if any) it used.
    docker compose exec web python manage.py seed_menu
    ```
 
+4. Create an admin user, for the monitoring view below:
+
+   ```bash
+   docker compose exec web python manage.py createsuperuser
+   ```
+
 ## UI
 
 Open [localhost:5173](http://localhost:5173). A conversation starts
@@ -61,6 +67,21 @@ via `GET /api/menu/`.
 If `ANTHROPIC_API_KEY` in `.env` is still the placeholder value, sending a
 message will show a visible error bubble instead of a reply — that's expected
 and confirms the request reached the agent.
+
+## Monitoring (admin)
+
+Every agent turn — from both the regular and streaming chat endpoints — logs
+a `chat.AgentRun` row: which model ran, latency, how many LLM calls the turn
+took (workflow steps — 1 + number of tools used), every tool called and its
+arguments, token usage, an estimated cost, and, on failure, the error message
+instead of a raised exception. Browse it at
+[localhost:8010/admin/](http://localhost:8010/admin/) (log in with the
+superuser created above) under **Chat → Agent runs** — filterable by status
+and model, and read-only (it's a log, not something to hand-edit).
+
+Cost is an *estimate*: `ANTHROPIC_PRICING` in `config/settings.py` is a
+placeholder per-million-token rate table, not verified against Anthropic's
+published pricing — update it before trusting the dollar figures.
 
 The frontend runs via Vite's dev server with hot reload (`frontend/` bind-mounted
 into the `frontend` container), so edits to `frontend/src` show up immediately.
@@ -154,6 +175,6 @@ the model during a run even though the eval's own writes don't stick around.
 ## Notes
 
 - No authentication — this is a local learning demo.
-- `ANTHROPIC_MODEL` in `.env` defaults to `claude-opus-5`; switch to
-  `claude-sonnet-5` or `claude-haiku-4-5` for cheaper/faster runs while
-  experimenting.
+- `ANTHROPIC_MODEL` in `.env` defaults to `claude-haiku-4-5`; switch to
+  `claude-sonnet-5` or `claude-opus-5` for slower/pricier but stronger runs
+  while experimenting.

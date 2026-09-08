@@ -1,3 +1,5 @@
+import time
+
 from django.conf import settings
 from langchain.agents import create_agent
 from langchain_anthropic import ChatAnthropic
@@ -55,6 +57,48 @@ def _extract_reply_text(output) -> str:
     return "".join(parts)
 
 
+def _collect_tool_calls(messages) -> list:
+    """Every tool call made across a list of messages, in order.
+
+    Unlike the single tool_used/tool_input orchai has always surfaced (the
+    *first* tool call), this keeps all of them - needed to monitor turns
+    where the model calls more than one tool.
+    """
+    calls = []
+    for msg in messages:
+        for call in getattr(msg, "tool_calls", None) or []:
+            calls.append({"name": call["name"], "args": call["args"]})
+    return calls
+
+
+def _sum_token_usage(messages) -> tuple[int, int, int]:
+    """Sum usage_metadata (input/output/total tokens) across messages.
+
+    Only AIMessages carry usage_metadata, and only when the provider
+    reports it (Anthropic does) - getattr defaults protect against both
+    the attribute being absent and it being None.
+    """
+    input_tokens = output_tokens = total_tokens = 0
+    for msg in messages:
+        usage = getattr(msg, "usage_metadata", None)
+        if not usage:
+            continue
+        input_tokens += usage.get("input_tokens", 0)
+        output_tokens += usage.get("output_tokens", 0)
+        total_tokens += usage.get("total_tokens", 0)
+    return input_tokens, output_tokens, total_tokens
+
+
+def _estimate_cost_usd(model_name: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost from settings.ANTHROPIC_PRICING. 0.0 for an unknown
+    model rather than guessing - see the settings.py comment on that table.
+    """
+    rates = settings.ANTHROPIC_PRICING.get(model_name)
+    if not rates:
+        return 0.0
+    return (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
+
+
 def _history_to_messages(messages):
     history = []
     for msg in messages:
@@ -68,32 +112,65 @@ def _history_to_messages(messages):
 def run_agent(user_input: str, prior_messages) -> dict:
     """Run the LangChain agent for one turn.
 
-    Returns a dict with the assistant's reply text, the name of the tool it
-    invoked (empty string if it answered directly), and the input passed to
-    that tool (empty dict if none).
+    Returns a dict with the assistant's reply text; the name/input of the
+    first tool it invoked (empty if it answered directly); and monitoring
+    data for chat.AgentRun - every tool call made, the number of LLM calls
+    this turn took (workflow steps), token usage, an estimated cost,
+    latency, and (on failure) an error message instead of a raised
+    exception, so the caller can always log a row.
     """
     agent = _get_agent()
     input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
+    model_name = settings.ANTHROPIC_MODEL
+    started = time.monotonic()
 
-    result = agent.invoke({"messages": input_messages})
+    try:
+        result = agent.invoke({"messages": input_messages})
+    except Exception as exc:
+        return {
+            "reply": "",
+            "tool_used": "",
+            "tool_input": {},
+            "tool_calls": [],
+            "model_call_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "model": model_name,
+            "error": str(exc),
+        }
+
+    latency_ms = round((time.monotonic() - started) * 1000)
 
     # Everything at or after this index is new this turn - input_messages is
     # itself a prefix of result["messages"], since create_agent appends
     # rather than replacing.
     new_messages = result["messages"][len(input_messages):]
 
-    tool_used = ""
-    tool_input = {}
-    for msg in new_messages:
-        if getattr(msg, "tool_calls", None):
-            first_call = msg.tool_calls[0]
-            tool_used = first_call["name"]
-            tool_input = first_call["args"]
-            break
+    tool_calls = _collect_tool_calls(new_messages)
+    tool_used = tool_calls[0]["name"] if tool_calls else ""
+    tool_input = tool_calls[0]["args"] if tool_calls else {}
+    model_call_count = sum(1 for msg in new_messages if isinstance(msg, AIMessage))
+    input_tokens, output_tokens, total_tokens = _sum_token_usage(new_messages)
 
     reply = _extract_reply_text(result["messages"][-1].content)
 
-    return {"reply": reply, "tool_used": tool_used, "tool_input": tool_input}
+    return {
+        "reply": reply,
+        "tool_used": tool_used,
+        "tool_input": tool_input,
+        "tool_calls": tool_calls,
+        "model_call_count": model_call_count,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "estimated_cost_usd": _estimate_cost_usd(model_name, input_tokens, output_tokens),
+        "latency_ms": latency_ms,
+        "model": model_name,
+        "error": None,
+    }
 
 
 def _text_from_chunk_content(content) -> str:
@@ -119,8 +196,11 @@ async def stream_agent_reply(user_input: str, prior_messages):
     """Run the agent for one turn, yielding incremental events as they occur.
 
     Yields dicts of the form {"type": "token" | "tool_start" | "done", ...}.
-    A "done" event is always yielded last, with the same shape run_agent
-    returns (reply/tool_used/tool_input), for the caller to persist.
+    A "done" event is always yielded last, with the same monitoring shape
+    run_agent returns (reply/tool_used/tool_input/tool_calls/
+    model_call_count/token usage/cost/latency/model/error), for the caller
+    to persist - including on failure, where "error" is set instead of the
+    generator raising, so a row can still be logged.
 
     Every generated token is streamed live as it arrives, including a "let
     me check that for you" preamble the model writes before deciding to call
@@ -139,36 +219,67 @@ async def stream_agent_reply(user_input: str, prior_messages):
     """
     agent = _get_agent()
     input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
+    model_name = settings.ANTHROPIC_MODEL
+    started = time.monotonic()
 
     tool_used = ""
     tool_input = {}
+    tool_calls = []
     turn_buffer = []
     final_reply_parts = []
+    model_call_count = 0
+    input_tokens = output_tokens = total_tokens = 0
 
-    async for event in agent.astream_events({"messages": input_messages}, version="v2"):
-        kind = event["event"]
+    def done_event(error=None):
+        return {
+            "type": "done",
+            "reply": "".join(final_reply_parts),
+            "tool_used": tool_used,
+            "tool_input": tool_input,
+            "tool_calls": tool_calls,
+            "model_call_count": model_call_count,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": _estimate_cost_usd(model_name, input_tokens, output_tokens),
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "model": model_name,
+            "error": error,
+        }
 
-        if kind == "on_chat_model_start":
-            turn_buffer = []
+    try:
+        async for event in agent.astream_events({"messages": input_messages}, version="v2"):
+            kind = event["event"]
 
-        elif kind == "on_chat_model_stream":
-            text = _text_from_chunk_content(event["data"]["chunk"].content)
-            if text:
-                turn_buffer.append(text)
-                yield {"type": "token", "text": text}
+            if kind == "on_chat_model_start":
+                turn_buffer = []
+                model_call_count += 1
 
-        elif kind == "on_chat_model_end":
-            if not event["data"]["output"].tool_calls:
-                final_reply_parts.extend(turn_buffer)
+            elif kind == "on_chat_model_stream":
+                text = _text_from_chunk_content(event["data"]["chunk"].content)
+                if text:
+                    turn_buffer.append(text)
+                    yield {"type": "token", "text": text}
 
-        elif kind == "on_tool_start":
-            tool_used = event["name"]
-            tool_input = event["data"].get("input", {})
-            yield {"type": "tool_start", "tool": tool_used}
+            elif kind == "on_chat_model_end":
+                output = event["data"]["output"]
+                if not output.tool_calls:
+                    final_reply_parts.extend(turn_buffer)
+                usage = getattr(output, "usage_metadata", None)
+                if usage:
+                    input_tokens += usage.get("input_tokens", 0)
+                    output_tokens += usage.get("output_tokens", 0)
+                    total_tokens += usage.get("total_tokens", 0)
 
-    yield {
-        "type": "done",
-        "reply": "".join(final_reply_parts),
-        "tool_used": tool_used,
-        "tool_input": tool_input,
-    }
+            elif kind == "on_tool_start":
+                name = event["name"]
+                args = event["data"].get("input", {})
+                tool_used = name
+                tool_input = args
+                tool_calls.append({"name": name, "args": args})
+                yield {"type": "tool_start", "tool": name}
+    except Exception as exc:
+        yield done_event(error=str(exc))
+        return
+
+    yield done_event()

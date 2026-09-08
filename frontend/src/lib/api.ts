@@ -37,6 +37,7 @@ export interface StreamHandlers {
   onToken?: (text: string) => void;
   onToolStart?: (tool: string) => void;
   onDone?: (message: Message) => void;
+  onError?: (error: Error) => void;
 }
 
 /**
@@ -91,6 +92,10 @@ export async function streamMessage(
       if (eventType === "token") handlers.onToken?.(payload.text);
       else if (eventType === "tool_start") handlers.onToolStart?.(payload.tool);
       else if (eventType === "done") handlers.onDone?.(payload as Message);
+      else if (eventType === "error") {
+        handlers.onError?.(new Error(payload.detail || "The assistant hit an error."));
+        return;
+      }
     }
   }
 }

@@ -90,7 +90,16 @@ REST_FRAMEWORK = {
 }
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+
+# Placeholder per-million-token USD pricing, used only to estimate cost in
+# the admin monitoring view (chat.AgentRun). Illustrative, not verified
+# against Anthropic's published rates - update before trusting the numbers.
+ANTHROPIC_PRICING = {
+    "claude-opus-5": {"input": 15.0, "output": 75.0},
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    "claude-haiku-4-5": {"input": 0.8, "output": 4.0},
+}
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
