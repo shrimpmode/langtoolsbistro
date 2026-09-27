@@ -1,3 +1,6 @@
+import { toolLabel } from "../lib/toolLabels";
+import Markdown from "./Markdown";
+
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
@@ -5,12 +8,19 @@ interface MessageBubbleProps {
   isError?: boolean;
 }
 
-export default function MessageBubble({
-  role,
-  content,
-  toolsUsed,
-  isError,
-}: MessageBubbleProps) {
+export function ToolChip({ label, active = false }: { label: string; active?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+      <span
+        className={`h-1.5 w-1.5 rounded-full bg-amber-600 ${active ? "animate-pulse" : ""}`}
+        aria-hidden="true"
+      />
+      {label}
+    </span>
+  );
+}
+
+export default function MessageBubble({ role, content, toolsUsed, isError }: MessageBubbleProps) {
   const isUser = role === "user";
 
   return (
@@ -18,25 +28,26 @@ export default function MessageBubble({
       <div
         className={`max-w-[75%] rounded-2xl px-4 py-2 shadow-sm ${
           isError
-            ? "bg-red-50 text-red-800 border border-red-200"
+            ? "border border-red-200 bg-red-50 text-red-800"
             : isUser
               ? "bg-amber-700 text-white"
-              : "bg-white text-stone-800 border border-stone-200"
+              : "border border-stone-200 bg-white text-stone-800"
         }`}
       >
         {!isUser && toolsUsed?.length ? (
-          <div className="mb-1 flex flex-wrap gap-1">
+          <div className="mb-1.5 flex flex-wrap gap-1">
             {toolsUsed.map((tool, i) => (
-              <span
-                key={i}
-                className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
-              >
-                🔧 {tool}
-              </span>
+              <ToolChip key={i} label={toolLabel(tool, "done")} />
             ))}
           </div>
         ) : null}
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">{content}</p>
+        {isUser || isError ? (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed">{content}</p>
+        ) : (
+          <div className="text-sm leading-relaxed">
+            <Markdown>{content}</Markdown>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -28,7 +28,7 @@ export default function App() {
             <ChatPanel conversationId={conversationId} />
           </div>
           <div className="min-h-0 overflow-y-auto border-t border-stone-200 md:border-t-0">
-            <GuestSignIn conversation={conversation} />
+            <GuestSignIn key={conversationId} conversation={conversation} />
             <MenuPanel />
           </div>
         </div>

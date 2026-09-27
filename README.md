@@ -84,9 +84,17 @@ real provider is a settings change: set `EMAIL_BACKEND` to
 Open [localhost:5173](http://localhost:5173). A conversation starts
 automatically; the chat panel covers all four backend behaviors depending on
 what you type (menu question, booking request, booking lookup, or general
-small talk), and shows a `🔧 tool_name` badge for each tool an assistant reply
-called. The right-hand panel is a live view of the seeded menu
-via `GET /api/menu/`.
+small talk). Replies render Markdown, and each tool a reply used shows as a
+plain-language label ("Checked the menu", "Looked up bookings"; see
+`frontend/src/lib/toolLabels.ts`). While a reply streams, any text the model
+writes before calling a tool appears as a faded status line, since only the
+text after the last tool call is saved as the reply.
+
+The conversation id is kept in `localStorage`, so reloading the page restores
+the chat history and the guest's sign-in (via `GET /api/conversations/<id>/`
+and `.../messages/`). **New chat** starts a fresh conversation, which also
+signs the guest out. The right-hand panel has guest sign-in and a live view of
+the seeded menu via `GET /api/menu/`.
 
 If `ANTHROPIC_API_KEY` in `.env` is still the placeholder value, sending a
 message will show a visible error bubble instead of a reply — that's expected

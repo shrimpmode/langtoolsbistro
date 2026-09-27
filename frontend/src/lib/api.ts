@@ -37,6 +37,10 @@ export function createConversation(): Promise<Conversation> {
   return request("/conversations/", { method: "POST" });
 }
 
+export function getConversation(conversationId: string): Promise<Conversation> {
+  return request(`/conversations/${conversationId}/`);
+}
+
 export function listMessages(conversationId: string): Promise<Message[]> {
   return request(`/conversations/${conversationId}/messages/`);
 }

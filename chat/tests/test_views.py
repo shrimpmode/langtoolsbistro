@@ -19,6 +19,28 @@ class ConversationCreateViewTests(TestCase):
         self.assertTrue(Conversation.objects.filter(id=response.data["id"]).exists())
 
 
+class ConversationDetailViewTests(TestCase):
+    def test_returns_conversation_with_sign_in_state(self):
+        conversation = Conversation.objects.create(guest_email="dana@example.com")
+
+        response = self.client.get(
+            reverse("conversation-detail", kwargs={"conversation_id": conversation.id})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["id"], str(conversation.id))
+        self.assertEqual(response.data["guest_email"], "dana@example.com")
+
+    def test_unknown_conversation_returns_404(self):
+        response = self.client.get(
+            reverse(
+                "conversation-detail",
+                kwargs={"conversation_id": "00000000-0000-0000-0000-000000000000"},
+            )
+        )
+        self.assertEqual(response.status_code, 404)
+
+
 class MessageListCreateViewTests(TestCase):
     def setUp(self):
         self.conversation = Conversation.objects.create()
