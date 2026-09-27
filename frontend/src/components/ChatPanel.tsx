@@ -4,8 +4,8 @@ import { useStreamMessage } from "../hooks/useStreamMessage";
 import { listMessages } from "../lib/api";
 import { toolLabel } from "../lib/toolLabels";
 import Markdown from "./Markdown";
-import MessageBubble, { ToolChip } from "./MessageBubble";
-import type { ChatBubble, Message } from "../lib/types";
+import MessageBubble, { CardList, ToolChip } from "./MessageBubble";
+import type { ChatBubble, Message, ToolArtifact } from "../lib/types";
 
 const SUGGESTIONS = [
   "What's on the menu?",
@@ -21,6 +21,9 @@ function toBubble(message: Message): ChatBubble {
     role: message.role,
     content: message.content,
     toolsUsed: message.tool_calls.map((call) => call.name),
+    cards: message.tool_calls
+      .map((call) => call.artifact)
+      .filter((artifact): artifact is ToolArtifact => !!artifact),
   };
 }
 
@@ -33,7 +36,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
   const [historyState, setHistoryState] = useState<HistoryState>("loading");
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { send, isStreaming, statusText, answerText, tools } = useStreamMessage();
+  const { send, isStreaming, statusText, answerText, tools, cards } = useStreamMessage();
   const startNewConversation = useStartNewConversation();
 
   // Load the saved history whenever the conversation changes: on first
@@ -133,6 +136,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
               role={m.role}
               content={m.content}
               toolsUsed={m.toolsUsed}
+              cards={m.cards}
               isError={m.isError}
             />
           ))
@@ -156,6 +160,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
                   })}
                 </div>
               ) : null}
+              {cards.length ? <CardList cards={cards} /> : null}
               {answerText ? (
                 <div className="text-sm leading-relaxed text-stone-800">
                   <Markdown>{answerText}</Markdown>

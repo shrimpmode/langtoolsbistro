@@ -171,7 +171,10 @@ class RunAgentTests(SimpleTestCase):
 
         result = run_agent("Any desserts?", [])
 
-        self.assertEqual(result["tool_calls"], [{"name": "list_menu", "args": {"category": "dessert"}}])
+        self.assertEqual(
+            result["tool_calls"],
+            [{"name": "list_menu", "args": {"category": "dessert"}, "artifact": None}],
+        )
 
     @patch("chat.agent.orchestrator._get_agent")
     def test_every_tool_call_is_recorded_not_just_the_first(self, mock_get_agent):
@@ -226,6 +229,35 @@ class RunAgentTests(SimpleTestCase):
         self.assertIsInstance(messages[0], HumanMessage)
         self.assertEqual(messages[0].content, "hi")
         self.assertEqual(messages[1].content, "follow-up")
+
+
+class ToolArtifactTests(SimpleTestCase):
+    @patch("chat.agent.orchestrator._get_agent")
+    def test_each_tool_call_gets_its_own_artifact_by_tool_call_id(self, mock_get_agent):
+        card = {"kind": "reservation_created", "reservations": [{"code": "K7Q-4MX"}]}
+        turn = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "list_menu", "args": {}, "id": "call_1"},
+                    {"name": "create_reservation", "args": {}, "id": "call_2"},
+                ],
+            ),
+            # Results deliberately out of order: matching is by id, not position.
+            ToolMessage(content="Booked", tool_call_id="call_2", artifact=card),
+            ToolMessage(content="- Tiramisu", tool_call_id="call_1"),
+            AIMessage(content="Done!"),
+        ]
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {"messages": [HumanMessage(content="hi"), *turn]}
+        mock_get_agent.return_value = mock_agent
+
+        result = run_agent("hi", [])
+
+        self.assertEqual(
+            [(c["name"], c["artifact"]) for c in result["tool_calls"]],
+            [("list_menu", None), ("create_reservation", card)],
+        )
 
 
 class RunAgentContextTests(SimpleTestCase):
@@ -312,3 +344,27 @@ class StreamAgentReplyTests(SimpleTestCase):
         self._collect("my bookings?", [], guest_email="dana@example.com")
 
         self.assertEqual(seen["context"], GuestContext(guest_email="dana@example.com"))
+
+    @patch("chat.agent.orchestrator._get_agent")
+    def test_tool_end_event_carries_the_artifact(self, mock_get_agent):
+        card = {"kind": "reservation_list", "reservations": []}
+        final = [HumanMessage(content="hi"), AIMessage(content="ok")]
+
+        async def fake_events(*args, **kwargs):
+            yield {
+                "event": "on_tool_end",
+                "name": "check_reservation",
+                "data": {"output": ToolMessage(content="x", tool_call_id="c1", artifact=card)},
+                "parent_ids": ["root"],
+            }
+            yield {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {"messages": final}}, "parent_ids": []}
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = fake_events
+        mock_get_agent.return_value = mock_agent
+
+        events = self._collect("hi", [])
+
+        self.assertEqual(
+            events[0], {"type": "tool_end", "tool": "check_reservation", "artifact": card}
+        )

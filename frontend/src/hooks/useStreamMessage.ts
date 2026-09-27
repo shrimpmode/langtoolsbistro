@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamMessage } from "../lib/api";
-import type { Message } from "../lib/types";
+import type { Message, ToolArtifact } from "../lib/types";
 
 interface StreamState {
   isStreaming: boolean;
@@ -15,6 +15,8 @@ interface StreamState {
   answerText: string;
   /** Tools started so far this turn, in order. */
   tools: string[];
+  /** Card data from tools that have finished, shown before the reply text. */
+  cards: ToolArtifact[];
 }
 
 interface SendArgs {
@@ -29,6 +31,7 @@ const initialState: StreamState = {
   statusText: "",
   answerText: "",
   tools: [],
+  cards: [],
 };
 
 export function useStreamMessage() {
@@ -58,6 +61,9 @@ export function useStreamMessage() {
             statusText: [prev.statusText, prev.answerText.trim()].filter(Boolean).join(" "),
             answerText: "",
           })),
+        onToolEnd: (_tool, artifact) => {
+          if (artifact) setState((prev) => ({ ...prev, cards: [...prev.cards, artifact] }));
+        },
         onDone: (message) => {
           setState(initialState);
           onDone(message);

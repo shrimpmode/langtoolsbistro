@@ -46,7 +46,29 @@ def list_menu(category: str = "") -> str:
     return "\n".join(lines)
 
 
-@tool
+def _reservation_card(reservation: Reservation) -> dict:
+    """The JSON the chat UI renders as a booking card.
+
+    Built from the same rows the tool just described to the model, so a
+    card can never show more than the tool's access rules allowed.
+    """
+    return {
+        "code": format_confirmation_code(reservation.confirmation_code),
+        "customer_name": reservation.customer_name,
+        "party_size": reservation.party_size,
+        "date": reservation.date.isoformat(),
+        "time": reservation.time.strftime("%H:%M"),
+        "status": reservation.status,
+    }
+
+
+# response_format="content_and_artifact": each call returns (text, artifact).
+# The text becomes the ToolMessage the model reads; the artifact rides along
+# on ToolMessage.artifact for our own code and is never sent to the model.
+# The UI turns these artifacts into booking cards. None means "no card".
+
+
+@tool(response_format="content_and_artifact")
 def create_reservation(
     customer_name: str,
     party_size: int,
@@ -54,7 +76,7 @@ def create_reservation(
     time: str,
     runtime: ToolRuntime[GuestContext],
     contact_email: str = "",
-) -> str:
+) -> tuple[str, dict | None]:
     """Book a table reservation at the restaurant.
 
     Args:
@@ -69,12 +91,16 @@ def create_reservation(
     if not email:
         return (
             "No booking made: I need the guest's email address first (or they "
-            "can sign in). Ask them for it, then try again."
+            "can sign in). Ask them for it, then try again.",
+            None,
         )
     try:
         validate_email(email)
     except ValidationError:
-        return f"No booking made: {email!r} isn't a valid email address. Ask the guest to check it."
+        return (
+            f"No booking made: {email!r} isn't a valid email address. Ask the guest to check it.",
+            None,
+        )
 
     try:
         parsed_date = datetime.date.fromisoformat(date)
@@ -82,7 +108,8 @@ def create_reservation(
     except ValueError:
         return (
             "I couldn't understand that date/time. Please provide the date as "
-            "YYYY-MM-DD and the time as HH:MM (24-hour)."
+            "YYYY-MM-DD and the time as HH:MM (24-hour).",
+            None,
         )
 
     try:
@@ -94,22 +121,23 @@ def create_reservation(
             time=parsed_time,
         )
     except DataError:
-        return "I couldn't create that reservation — please double-check the details."
+        return "I couldn't create that reservation — please double-check the details.", None
 
     return (
         f"Reservation confirmed for {reservation.customer_name}, "
         f"party of {reservation.party_size}, on {reservation.date} "
         f"at {reservation.time.strftime('%H:%M')}. Confirmation code: "
         f"{format_confirmation_code(reservation.confirmation_code)}. Give the "
-        "guest this code - they need it to look the booking up later."
+        "guest this code - they need it to look the booking up later.",
+        {"kind": "reservation_created", "reservations": [_reservation_card(reservation)]},
     )
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def check_reservation(
     runtime: ToolRuntime[GuestContext],
     confirmation_code: str = "",
-) -> str:
+) -> tuple[str, dict | None]:
     """Look up the guest's existing reservations.
 
     If the guest is signed in, returns all bookings made with their email
@@ -136,12 +164,13 @@ def check_reservation(
         return (
             "Can't look up bookings yet: the guest isn't signed in and gave no "
             "confirmation code. Ask for the code from their booking, or suggest "
-            "they sign in with their email."
+            "they sign in with their email.",
+            None,
         )
 
-    reservations = reservations.order_by("-date", "-time")
-    if not reservations.exists():
-        return not_found
+    reservations = list(reservations.order_by("-date", "-time"))
+    if not reservations:
+        return not_found, None
 
     lines = [
         f"- {format_confirmation_code(r.confirmation_code)}: {r.customer_name}, "
@@ -149,7 +178,10 @@ def check_reservation(
         f"({r.get_status_display()})"
         for r in reservations
     ]
-    return "\n".join(lines)
+    return "\n".join(lines), {
+        "kind": "reservation_list",
+        "reservations": [_reservation_card(r) for r in reservations],
+    }
 
 
 TOOLS = [list_menu, create_reservation, check_reservation]
