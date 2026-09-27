@@ -9,6 +9,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
+    ToolMessage,
     messages_from_dict,
     messages_to_dict,
 )
@@ -134,9 +135,17 @@ def _summarize_turn(new_messages) -> dict:
 
     Shared by run_agent and stream_agent_reply so both paths agree on what
     "the reply" and "the tools used" were for a given turn.
+
+    Each tool call also carries its tool's artifact - the structured data a
+    content_and_artifact tool returned next to its text (see tools.py) -
+    matched to the call through the ToolMessage's tool_call_id. The UI
+    renders these as booking cards.
     """
+    artifacts = {
+        msg.tool_call_id: msg.artifact for msg in new_messages if isinstance(msg, ToolMessage)
+    }
     tool_calls = [
-        {"name": call["name"], "args": call["args"]}
+        {"name": call["name"], "args": call["args"], "artifact": artifacts.get(call["id"])}
         for msg in new_messages
         for call in getattr(msg, "tool_calls", None) or []
     ]
@@ -176,7 +185,7 @@ def run_agent(user_input: str, prior_messages, guest_email: str = "") -> dict:
 async def stream_agent_reply(user_input: str, prior_messages, guest_email: str = ""):
     """Run the agent for one turn, yielding incremental events as they occur.
 
-    Yields dicts of the form {"type": "token" | "tool_start" | "done", ...}.
+    Yields dicts of the form {"type": "token" | "tool_start" | "tool_end" | "done", ...}.
     A "done" event is always yielded last, with the same shape run_agent
     returns (reply/tool_calls/turn_messages), for the caller to persist.
 
@@ -215,6 +224,15 @@ async def stream_agent_reply(user_input: str, prior_messages, guest_email: str =
 
         elif kind == "on_tool_start":
             yield {"type": "tool_start", "tool": event["name"]}
+
+        elif kind == "on_tool_end":
+            # Lets the UI show a booking card as soon as the tool finishes,
+            # before the model has written its reply around it.
+            yield {
+                "type": "tool_end",
+                "tool": event["name"],
+                "artifact": getattr(event["data"].get("output"), "artifact", None),
+            }
 
         elif kind == "on_chain_end" and not event["parent_ids"]:
             # No parent means this is the whole agent graph finishing, not

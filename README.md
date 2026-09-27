@@ -90,6 +90,14 @@ plain-language label ("Checked the menu", "Looked up bookings"; see
 writes before calling a tool appears as a faded status line, since only the
 text after the last tool call is saved as the reply.
 
+Bookings and lookups also show a **booking card** (code with a copy button,
+date, time, party size). The card isn't parsed from the model's reply: the
+booking tools use LangChain's `response_format="content_and_artifact"` and
+return `(text, artifact)`. The text is what the model reads; the artifact
+stays on the `ToolMessage` and is never sent to the model. It reaches the UI
+as each call's `artifact` in `tool_calls`, and live through a `tool_end`
+stream event, so the card appears as soon as the tool finishes.
+
 The conversation id is kept in `localStorage`, so reloading the page restores
 the chat history and the guest's sign-in (via `GET /api/conversations/<id>/`
 and `.../messages/`). **New chat** starts a fresh conversation, which also

@@ -1,4 +1,4 @@
-import type { Conversation, Message, MenuItem, MockEmail } from "./types";
+import type { Conversation, Message, MenuItem, MockEmail, ToolArtifact } from "./types";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8010/api";
@@ -58,6 +58,7 @@ export function sendMessage(
 export interface StreamHandlers {
   onToken?: (text: string) => void;
   onToolStart?: (tool: string) => void;
+  onToolEnd?: (tool: string, artifact: ToolArtifact | null) => void;
   onDone?: (message: Message) => void;
 }
 
@@ -112,6 +113,7 @@ export async function streamMessage(
       const payload = JSON.parse(data);
       if (eventType === "token") handlers.onToken?.(payload.text);
       else if (eventType === "tool_start") handlers.onToolStart?.(payload.tool);
+      else if (eventType === "tool_end") handlers.onToolEnd?.(payload.tool, payload.artifact);
       else if (eventType === "done") handlers.onDone?.(payload as Message);
     }
   }

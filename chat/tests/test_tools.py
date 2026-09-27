@@ -74,7 +74,7 @@ class CreateReservationTests(TestCase):
         return create_reservation.func(runtime=runtime or _runtime(), **kwargs)
 
     def test_creates_reservation_with_valid_input(self):
-        result = self._book()
+        result, card = self._book()
         self.assertIn("Alex", result)
         self.assertIn("party of 4", result)
         reservation = Reservation.objects.get(customer_name="Alex")
@@ -84,9 +84,27 @@ class CreateReservationTests(TestCase):
         self.assertEqual(reservation.contact_email, "alex@example.com")
 
     def test_reply_includes_formatted_confirmation_code(self):
-        result = self._book()
+        result, card = self._book()
         code = Reservation.objects.get().confirmation_code
         self.assertIn(f"{code[:3]}-{code[3:]}", result)
+
+    def test_success_returns_a_booking_card(self):
+        result, card = self._book()
+        code = Reservation.objects.get().confirmation_code
+        self.assertEqual(card["kind"], "reservation_created")
+        self.assertEqual(
+            card["reservations"],
+            [
+                {
+                    "code": f"{code[:3]}-{code[3:]}",
+                    "customer_name": "Alex",
+                    "party_size": 4,
+                    "date": "2026-09-01",
+                    "time": "19:00",
+                    "status": "confirmed",
+                }
+            ],
+        )
 
     def test_each_reservation_gets_a_different_code(self):
         self._book()
@@ -95,12 +113,13 @@ class CreateReservationTests(TestCase):
         self.assertEqual(len(codes), 2)
 
     def test_refuses_without_an_email(self):
-        result = self._book(contact_email="")
+        result, card = self._book(contact_email="")
         self.assertIn("No booking made", result)
+        self.assertIsNone(card)
         self.assertFalse(Reservation.objects.exists())
 
     def test_refuses_an_invalid_email(self):
-        result = self._book(contact_email="not-an-email")
+        result, card = self._book(contact_email="not-an-email")
         self.assertIn("isn't a valid email", result)
         self.assertFalse(Reservation.objects.exists())
 
@@ -114,12 +133,12 @@ class CreateReservationTests(TestCase):
         self.assertEqual(Reservation.objects.get().contact_email, "guest@example.com")
 
     def test_rejects_unparseable_date(self):
-        result = self._book(date="tonight")
+        result, card = self._book(date="tonight")
         self.assertIn("couldn't understand", result)
         self.assertFalse(Reservation.objects.exists())
 
     def test_rejects_unparseable_time(self):
-        result = self._book(time="7pm")
+        result, card = self._book(time="7pm")
         self.assertIn("couldn't understand", result)
         self.assertFalse(Reservation.objects.exists())
 
@@ -144,36 +163,41 @@ class CheckReservationTests(TestCase):
         )
 
     def test_refuses_without_sign_in_or_code(self):
-        result = check_reservation.func(runtime=_runtime())
+        result, card = check_reservation.func(runtime=_runtime())
         self.assertIn("Can't look up bookings", result)
         self.assertNotIn("Priya", result)
+        self.assertIsNone(card)
 
     def test_finds_reservation_by_code(self):
-        result = check_reservation.func(runtime=_runtime(), confirmation_code="K7Q4MX")
+        result, card = check_reservation.func(runtime=_runtime(), confirmation_code="K7Q4MX")
         self.assertIn("Priya", result)
         self.assertIn("2026-09-01", result)
         self.assertNotIn("Sam", result)
 
     def test_code_is_forgiving_about_case_and_dashes(self):
-        result = check_reservation.func(runtime=_runtime(), confirmation_code=" k7q-4mx ")
+        result, card = check_reservation.func(runtime=_runtime(), confirmation_code=" k7q-4mx ")
         self.assertIn("Priya", result)
 
     def test_wrong_code_finds_nothing(self):
-        result = check_reservation.func(runtime=_runtime(), confirmation_code="AAA-AAA")
+        result, card = check_reservation.func(runtime=_runtime(), confirmation_code="AAA-AAA")
         self.assertIn("No reservation matches", result)
+        self.assertIsNone(card)
 
     def test_signed_in_guest_sees_only_their_own_bookings(self):
-        result = check_reservation.func(runtime=_runtime("priya@example.com"))
+        result, card = check_reservation.func(runtime=_runtime("priya@example.com"))
         self.assertIn("K7Q-4MX", result)
         self.assertNotIn("Sam", result)
+        # The card follows the same access rules as the text.
+        self.assertEqual(card["kind"], "reservation_list")
+        self.assertEqual([r["code"] for r in card["reservations"]], ["K7Q-4MX"])
 
     def test_signed_in_guest_cannot_use_someone_elses_code(self):
-        result = check_reservation.func(
+        result, card = check_reservation.func(
             runtime=_runtime("priya@example.com"), confirmation_code="ZZZ222"
         )
         self.assertNotIn("Sam", result)
         self.assertIn("No reservations found", result)
 
     def test_signed_in_guest_with_no_bookings(self):
-        result = check_reservation.func(runtime=_runtime("new@example.com"))
+        result, card = check_reservation.func(runtime=_runtime("new@example.com"))
         self.assertIn("No reservations found", result)

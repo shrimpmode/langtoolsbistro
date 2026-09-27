@@ -25,6 +25,22 @@ export interface Message {
 export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
+  /** Structured data the tool returned for the UI; never shown to the model. */
+  artifact?: ToolArtifact | null;
+}
+
+export interface ReservationCardData {
+  code: string; // formatted, e.g. "K7Q-4MX"
+  customer_name: string;
+  party_size: number;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM, 24-hour
+  status: "confirmed" | "cancelled";
+}
+
+export interface ToolArtifact {
+  kind: "reservation_created" | "reservation_list";
+  reservations: ReservationCardData[];
 }
 
 export type MenuCategory = "appetizer" | "main" | "dessert" | "drink";
@@ -42,5 +58,6 @@ export interface ChatBubble {
   role: MessageRole;
   content: string;
   toolsUsed?: string[];
+  cards?: ToolArtifact[];
   isError?: boolean;
 }

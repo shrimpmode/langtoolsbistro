@@ -1,10 +1,13 @@
 import { toolLabel } from "../lib/toolLabels";
+import type { ToolArtifact } from "../lib/types";
+import BookingCards from "./BookingCard";
 import Markdown from "./Markdown";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   toolsUsed?: string[];
+  cards?: ToolArtifact[];
   isError?: boolean;
 }
 
@@ -20,7 +23,13 @@ export function ToolChip({ label, active = false }: { label: string; active?: bo
   );
 }
 
-export default function MessageBubble({ role, content, toolsUsed, isError }: MessageBubbleProps) {
+export default function MessageBubble({
+  role,
+  content,
+  toolsUsed,
+  cards,
+  isError,
+}: MessageBubbleProps) {
   const isUser = role === "user";
 
   return (
@@ -41,6 +50,7 @@ export default function MessageBubble({ role, content, toolsUsed, isError }: Mes
             ))}
           </div>
         ) : null}
+        {!isUser && cards?.length ? <CardList cards={cards} /> : null}
         {isUser || isError ? (
           <p className="whitespace-pre-wrap text-sm leading-relaxed">{content}</p>
         ) : (
@@ -49,6 +59,17 @@ export default function MessageBubble({ role, content, toolsUsed, isError }: Mes
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Booking cards, shown above the reply text both while streaming and after. */
+export function CardList({ cards }: { cards: ToolArtifact[] }) {
+  return (
+    <div className="mb-2 space-y-2">
+      {cards.map((artifact, i) => (
+        <BookingCards key={i} artifact={artifact} />
+      ))}
     </div>
   );
 }
