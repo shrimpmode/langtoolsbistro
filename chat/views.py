@@ -47,7 +47,8 @@ class MessageListCreateView(APIView):
             conversation=conversation,
             role=Message.Role.ASSISTANT,
             content=result["reply"],
-            tool_used=result["tool_used"],
+            tool_calls=result["tool_calls"],
+            turn_messages=result["turn_messages"],
         )
 
         return Response(
@@ -98,7 +99,8 @@ async def stream_message(request, conversation_id):
                 conversation=conversation,
                 role=Message.Role.ASSISTANT,
                 content=event["reply"],
-                tool_used=event["tool_used"],
+                tool_calls=event["tool_calls"],
+                turn_messages=event["turn_messages"],
             )
             payload = MessageSerializer(assistant_message).data
             yield f"event: done\ndata: {json.dumps(payload)}\n\n"

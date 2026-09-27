@@ -15,8 +15,9 @@ that decides which restaurant action to take based on a guest's message.
 
 ## How it works
 
-Each turn, the agent gets a system prompt describing the restaurant plus the
-conversation history, and three tools backed by the Django ORM:
+Each turn, the agent gets a system prompt describing the restaurant (rebuilt
+on every model call with the current date and time in `RESTAURANT_TIME_ZONE`,
+so "tomorrow" means something) plus the conversation history, and three tools backed by the Django ORM:
 
 - `list_menu` — reads `MenuItem` rows
 - `create_reservation` — creates a `Reservation` row
@@ -25,7 +26,10 @@ conversation history, and three tools backed by the Django ORM:
 For anything else (hours, location, small talk) the model just answers
 directly from the system prompt — no tool call. Every message (user and
 assistant) is persisted to Postgres via `chat.Conversation` / `chat.Message`,
-and the assistant's response records which tool (if any) it used.
+and the assistant's response records every tool it called (`tool_calls`) plus
+the turn's full LangChain message sequence (`turn_messages`). That sequence is
+replayed as history on later turns, so the model still sees what its tools
+returned earlier in the conversation, not just its own final replies.
 
 ## Setup
 
@@ -54,8 +58,8 @@ and the assistant's response records which tool (if any) it used.
 Open [localhost:5173](http://localhost:5173). A conversation starts
 automatically; the chat panel covers all four backend behaviors depending on
 what you type (menu question, booking request, booking lookup, or general
-small talk), and shows a `🔧 tool_name` badge on any assistant reply that
-triggered a tool call. The right-hand panel is a live view of the seeded menu
+small talk), and shows a `🔧 tool_name` badge for each tool an assistant reply
+called. The right-hand panel is a live view of the seeded menu
 via `GET /api/menu/`.
 
 If `ANTHROPIC_API_KEY` in `.env` is still the placeholder value, sending a

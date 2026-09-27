@@ -1,14 +1,14 @@
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
-  toolUsed?: string;
+  toolsUsed?: string[];
   isError?: boolean;
 }
 
 export default function MessageBubble({
   role,
   content,
-  toolUsed,
+  toolsUsed,
   isError,
 }: MessageBubbleProps) {
   const isUser = role === "user";
@@ -24,10 +24,17 @@ export default function MessageBubble({
               : "bg-white text-stone-800 border border-stone-200"
         }`}
       >
-        {!isUser && toolUsed ? (
-          <span className="mb-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
-            🔧 {toolUsed}
-          </span>
+        {!isUser && toolsUsed?.length ? (
+          <div className="mb-1 flex flex-wrap gap-1">
+            {toolsUsed.map((tool, i) => (
+              <span
+                key={i}
+                className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+              >
+                🔧 {tool}
+              </span>
+            ))}
+          </div>
         ) : null}
         <p className="whitespace-pre-wrap text-sm leading-relaxed">{content}</p>
       </div>

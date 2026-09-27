@@ -13,6 +13,9 @@ Usage:
     python manage.py run_evals
     python manage.py run_evals --case create_reservation_extracts_all_fields
 """
+from contextlib import nullcontext
+from unittest.mock import patch
+
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
@@ -38,18 +41,29 @@ def _run_case(case) -> tuple:
     if case.setup:
         case.setup()
 
+    pin_now = (
+        patch("chat.agent.orchestrator._now", return_value=case.now)
+        if case.now
+        else nullcontext()
+    )
     try:
-        result = run_agent(case.input, prior_messages=[])
+        with pin_now:
+            result = run_agent(case.input, prior_messages=[])
     except Exception as exc:  # noqa: BLE001 - eval harness must not crash on a bad case
         return False, [f"agent raised {type(exc).__name__}: {exc}"], ""
 
     failures = []
-    tool_used = result["tool_used"] or None
-    if tool_used != case.expected_tool:
-        failures.append(f"tool: expected {case.expected_tool!r}, got {tool_used!r}")
-
-    if case.expected_tool is not None and tool_used == case.expected_tool:
-        failures.extend(_check_tool_input(case.expected_tool_input, result["tool_input"]))
+    tool_names = [call["name"] for call in result["tool_calls"]]
+    if case.expected_tool is None:
+        if tool_names:
+            failures.append(f"tool: expected none, got {tool_names!r}")
+    elif case.expected_tool not in tool_names:
+        failures.append(f"tool: expected {case.expected_tool!r}, got {tool_names!r}")
+    else:
+        # Check the args of the first call to the expected tool - a turn may
+        # also call others (e.g. list_menu before create_reservation).
+        call = next(c for c in result["tool_calls"] if c["name"] == case.expected_tool)
+        failures.extend(_check_tool_input(case.expected_tool_input, call["args"]))
 
     reply = result["reply"]
     for substring in case.expected_reply_contains:
