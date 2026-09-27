@@ -5,8 +5,8 @@ import type { ChatBubble } from "../lib/types";
 
 const SUGGESTIONS = [
   "What's on the menu?",
-  "Book a table for 4 tonight at 7pm under Alex",
-  "Do you have a table booked for Alex?",
+  "Book a table for 4 tonight at 7pm under Alex, alex@example.com",
+  "Look up my booking",
   "What time do you close?",
 ];
 

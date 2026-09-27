@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "restaurant",
     "chat",
+    "guests",
 ]
 
 MIDDLEWARE = [
@@ -95,6 +96,15 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 # The restaurant's local time zone - what "today" and "tonight" mean to a
 # guest. Deliberately separate from TIME_ZONE, which stays UTC for storage.
 RESTAURANT_TIME_ZONE = os.environ.get("RESTAURANT_TIME_ZONE", "America/New_York")
+
+# Sign-in emails go to the mock inbox (guests/mock_email.py) unless another
+# backend is configured, e.g. django.core.mail.backends.smtp.EmailBackend
+# plus the EMAIL_HOST/EMAIL_PORT/... settings for a real provider.
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "guests.mock_email.MockInboxBackend")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Trattoria Orchai <hello@orchai.test>")
+# GET /api/mock-inbox/ lets anyone read every "sent" email, sign-in codes
+# included, so it only exists in development.
+MOCK_INBOX_ENABLED = DEBUG
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",

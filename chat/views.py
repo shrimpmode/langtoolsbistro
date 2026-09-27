@@ -41,7 +41,7 @@ class MessageListCreateView(APIView):
             conversation=conversation, role=Message.Role.USER, content=user_content
         )
 
-        result = run_agent(user_content, prior_messages)
+        result = run_agent(user_content, prior_messages, conversation.guest_email)
 
         assistant_message = Message.objects.create(
             conversation=conversation,
@@ -90,7 +90,9 @@ async def stream_message(request, conversation_id):
     )
 
     async def event_stream():
-        async for event in stream_agent_reply(user_content, prior_messages):
+        async for event in stream_agent_reply(
+            user_content, prior_messages, conversation.guest_email
+        ):
             if event["type"] != "done":
                 yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
                 continue

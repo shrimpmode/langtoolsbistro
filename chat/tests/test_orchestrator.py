@@ -21,6 +21,7 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
+from chat.agent.tools import GuestContext
 from chat.agent.orchestrator import (
     _history_to_messages,
     build_system_prompt,
@@ -54,6 +55,12 @@ class BuildSystemPromptTests(SimpleTestCase):
         self.assertIn("Saturday, September 26, 2026, 18:30", prompt)
         self.assertIn("2026-09-26", prompt)
         self.assertIn("Trattoria Orchai", prompt)
+
+    def test_says_when_guest_is_signed_in(self):
+        now = datetime.datetime(2026, 9, 26, 18, 30, tzinfo=ZoneInfo("America/New_York"))
+
+        self.assertIn("signed in as dana@example.com", build_system_prompt(now, "dana@example.com"))
+        self.assertIn("not signed in", build_system_prompt(now))
 
 
 class HistoryToMessagesTests(SimpleTestCase):
@@ -221,14 +228,33 @@ class RunAgentTests(SimpleTestCase):
         self.assertEqual(messages[1].content, "follow-up")
 
 
+class RunAgentContextTests(SimpleTestCase):
+    @patch("chat.agent.orchestrator._get_agent")
+    def test_signed_in_guest_is_passed_as_runtime_context(self, mock_get_agent):
+        mock_agent = MagicMock()
+        mock_agent.invoke.return_value = {
+            "messages": [HumanMessage(content="my bookings?"), AIMessage(content="ok")]
+        }
+        mock_get_agent.return_value = mock_agent
+
+        run_agent("my bookings?", [], guest_email="dana@example.com")
+
+        self.assertEqual(
+            mock_agent.invoke.call_args.kwargs["context"],
+            GuestContext(guest_email="dana@example.com"),
+        )
+
+
 class StreamAgentReplyTests(SimpleTestCase):
     """Feeds stream_agent_reply a hand-written astream_events sequence, in
     the shape LangGraph emits it, rather than a real model."""
 
     @staticmethod
-    def _collect(user_input, prior):
+    def _collect(user_input, prior, guest_email=""):
         async def run():
-            return [event async for event in stream_agent_reply(user_input, prior)]
+            return [
+                event async for event in stream_agent_reply(user_input, prior, guest_email)
+            ]
 
         return async_to_sync(run)()
 
@@ -269,3 +295,20 @@ class StreamAgentReplyTests(SimpleTestCase):
             [call["name"] for call in done["tool_calls"]], ["list_menu", "create_reservation"]
         )
         self.assertEqual(len(done["turn_messages"]), 4)
+
+    @patch("chat.agent.orchestrator._get_agent")
+    def test_signed_in_guest_is_passed_as_runtime_context(self, mock_get_agent):
+        seen = {}
+        final = [HumanMessage(content="my bookings?"), AIMessage(content="ok")]
+
+        async def fake_events(*args, **kwargs):
+            seen.update(kwargs)
+            yield {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {"messages": final}}, "parent_ids": []}
+
+        mock_agent = MagicMock()
+        mock_agent.astream_events = fake_events
+        mock_get_agent.return_value = mock_agent
+
+        self._collect("my bookings?", [], guest_email="dana@example.com")
+
+        self.assertEqual(seen["context"], GuestContext(guest_email="dana@example.com"))

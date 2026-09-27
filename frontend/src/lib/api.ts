@@ -1,4 +1,4 @@
-import type { Conversation, Message, MenuItem } from "./types";
+import type { Conversation, Message, MenuItem, MockEmail } from "./types";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8010/api";
@@ -10,9 +10,27 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    throw new ApiError(res.status, body);
   }
   return res.json();
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: string
+  ) {
+    super(`${status}: ${body}`);
+  }
+
+  /** The API's human-readable {"detail": ...} message, if it sent one. */
+  get detail(): string | null {
+    try {
+      return JSON.parse(this.body).detail ?? null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export function createConversation(): Promise<Conversation> {
@@ -97,4 +115,31 @@ export async function streamMessage(
 
 export function getMenu(): Promise<MenuItem[]> {
   return request("/menu/");
+}
+
+export function requestLoginCode(conversationId: string, email: string): Promise<void> {
+  return request(`/conversations/${conversationId}/login/`, {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function verifyLoginCode(
+  conversationId: string,
+  email: string,
+  code: string
+): Promise<Conversation> {
+  return request(`/conversations/${conversationId}/login/verify/`, {
+    method: "POST",
+    body: JSON.stringify({ email, code }),
+  });
+}
+
+export function logout(conversationId: string): Promise<Conversation> {
+  return request(`/conversations/${conversationId}/logout/`, { method: "POST" });
+}
+
+/** Emails the mock email service "sent". The endpoint 404s outside dev. */
+export function getMockInbox(): Promise<MockEmail[]> {
+  return request("/mock-inbox/");
 }
