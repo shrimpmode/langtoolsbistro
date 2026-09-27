@@ -3,6 +3,15 @@ export type MessageRole = "user" | "assistant";
 export interface Conversation {
   id: string;
   created_at: string;
+  guest_email: string;
+}
+
+export interface MockEmail {
+  id: number;
+  to: string;
+  subject: string;
+  body: string;
+  sent_at: string;
 }
 
 export interface Message {

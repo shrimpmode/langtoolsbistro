@@ -92,6 +92,16 @@ class MessageListCreateViewTests(TestCase):
         prior_messages_arg = mock_run_agent.call_args[0][1]
         self.assertEqual(len(prior_messages_arg), 2)
 
+    @patch("chat.views.run_agent")
+    def test_run_agent_receives_the_conversations_signed_in_guest(self, mock_run_agent):
+        mock_run_agent.return_value = {"reply": "ok", "tool_calls": [], "turn_messages": []}
+        self.conversation.guest_email = "dana@example.com"
+        self.conversation.save()
+
+        self.client.post(self.url, {"content": "my bookings?"}, content_type="application/json")
+
+        self.assertEqual(mock_run_agent.call_args[0][2], "dana@example.com")
+
     def test_empty_content_is_rejected(self):
         response = self.client.post(
             self.url, {"content": ""}, content_type="application/json"

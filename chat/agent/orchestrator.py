@@ -13,7 +13,7 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
-from .tools import TOOLS
+from .tools import TOOLS, GuestContext
 
 SYSTEM_PROMPT = """You are the front-of-house assistant for Trattoria Orchai, \
 a small Italian restaurant.
@@ -26,7 +26,16 @@ Restaurant facts you can answer directly, without using a tool:
 Use your tools when the guest wants to see the menu, book a table, or check \
 an existing reservation. For anything else (hours, location, general \
 questions, small talk), just answer directly. Keep replies short and \
-friendly, like a real host would speak."""
+friendly, like a real host would speak.
+
+Bookings and privacy:
+- To book, you need the guest's email address unless they're signed in. \
+After booking, always tell them their confirmation code.
+- You can only look up a booking for a signed-in guest, or with its \
+confirmation code. A name alone isn't enough - never try to find or reveal \
+a booking some other way.
+- Guests can sign in with their email from the panel on the right of the \
+chat; you can't sign them in yourself."""
 
 
 def _now() -> datetime.datetime:
@@ -37,19 +46,29 @@ def _now() -> datetime.datetime:
     return timezone.now().astimezone(ZoneInfo(settings.RESTAURANT_TIME_ZONE))
 
 
-def build_system_prompt(now: datetime.datetime) -> str:
-    """SYSTEM_PROMPT plus the current date and time.
+def build_system_prompt(now: datetime.datetime, guest_email: str = "") -> str:
+    """SYSTEM_PROMPT plus the current date and time, and who's signed in.
 
     Without this the model has no idea what day it is, so "tomorrow" or
     "this Friday" get resolved against whatever date it guesses - usually
     one from its training data. Day-of-week is included too, since that's
     how guests talk ("next Tuesday") and how our hours are written.
+
+    The sign-in line only saves the model from asking signed-in guests for
+    an email or code. What each guest may actually see is enforced by the
+    tools, from runtime context, not by this text.
     """
+    signed_in = (
+        f"The guest is signed in as {guest_email}."
+        if guest_email
+        else "The guest is not signed in."
+    )
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"Right now it is {now:%A, %B %-d, %Y, %H:%M} restaurant time "
         f"(today's date is {now:%Y-%m-%d}). Use this to turn relative dates "
-        f'like "tonight", "tomorrow", or "next Friday" into exact dates.'
+        f'like "tonight", "tomorrow", or "next Friday" into exact dates.\n\n'
+        f"{signed_in}"
     )
 
 
@@ -61,7 +80,7 @@ def _system_prompt_with_current_time(request: ModelRequest) -> str:
     the agent is built once per process - so it would freeze the date at
     server start. dynamic_prompt runs just before each model call instead.
     """
-    return build_system_prompt(_now())
+    return build_system_prompt(_now(), request.runtime.context.guest_email)
 
 
 _agent = None
@@ -85,6 +104,7 @@ def _get_agent():
             model=llm,
             tools=TOOLS,
             middleware=[_system_prompt_with_current_time],
+            context_schema=GuestContext,
         )
     return _agent
 
@@ -130,17 +150,22 @@ def _summarize_turn(new_messages) -> dict:
     }
 
 
-def run_agent(user_input: str, prior_messages) -> dict:
+def run_agent(user_input: str, prior_messages, guest_email: str = "") -> dict:
     """Run the LangChain agent for one turn.
 
     Returns a dict with the assistant's reply text, every tool it called
     (`[{"name", "args"}]`, empty if it answered directly), and the turn's
     full serialized message sequence for the caller to persist.
+
+    `guest_email` is the conversation's verified sign-in, if any. It reaches
+    the tools as runtime context - see GuestContext.
     """
     agent = _get_agent()
     input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
 
-    result = agent.invoke({"messages": input_messages})
+    result = agent.invoke(
+        {"messages": input_messages}, context=GuestContext(guest_email=guest_email)
+    )
 
     # Everything at or after this index is new this turn - input_messages is
     # itself a prefix of result["messages"], since create_agent appends
@@ -148,7 +173,7 @@ def run_agent(user_input: str, prior_messages) -> dict:
     return _summarize_turn(result["messages"][len(input_messages):])
 
 
-async def stream_agent_reply(user_input: str, prior_messages):
+async def stream_agent_reply(user_input: str, prior_messages, guest_email: str = ""):
     """Run the agent for one turn, yielding incremental events as they occur.
 
     Yields dicts of the form {"type": "token" | "tool_start" | "done", ...}.
@@ -174,7 +199,11 @@ async def stream_agent_reply(user_input: str, prior_messages):
 
     final_state = None
 
-    async for event in agent.astream_events({"messages": input_messages}, version="v2"):
+    async for event in agent.astream_events(
+        {"messages": input_messages},
+        version="v2",
+        context=GuestContext(guest_email=guest_email),
+    ):
         kind = event["event"]
 
         if kind == "on_chat_model_stream":

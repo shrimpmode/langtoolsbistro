@@ -6,6 +6,10 @@ from django.db import models
 class Conversation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Set once the guest proves they own this address with an emailed code
+    # (see guests/). Passed to the agent's tools as runtime context, never
+    # via the prompt, so the model can't be talked into a different identity.
+    guest_email = models.EmailField(blank=True, default="")
 
     def __str__(self):
         return str(self.id)

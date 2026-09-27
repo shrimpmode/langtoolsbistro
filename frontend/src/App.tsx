@@ -1,5 +1,6 @@
 import { useConversation } from "./hooks/useConversation";
 import ChatPanel from "./components/ChatPanel";
+import GuestSignIn from "./components/GuestSignIn";
 import MenuPanel from "./components/MenuPanel";
 
 export default function App() {
@@ -26,7 +27,8 @@ export default function App() {
           <div className="min-h-0 border-r border-stone-200">
             <ChatPanel conversationId={conversationId} />
           </div>
-          <div className="min-h-0 border-t border-stone-200 md:border-t-0">
+          <div className="min-h-0 overflow-y-auto border-t border-stone-200 md:border-t-0">
+            <GuestSignIn conversation={conversation} />
             <MenuPanel />
           </div>
         </div>

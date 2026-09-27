@@ -5,9 +5,13 @@ at) and is not part of `manage.py test` - it checks the agent's judgment,
 not code correctness, so it doesn't belong in a suite that must be fast,
 free, and deterministic.
 
-Any DB rows the cases create (menu items, reservations) are rolled back at
-the end via an outer transaction, so this is safe to run against a real
-database without leaving eval fixtures behind.
+Cases run against a throwaway test database (created and destroyed the
+same way `manage.py test` does it), emptied before each case. That matters
+because the agent runs its tools on worker threads with their own database
+connections: an outer transaction on this thread can't roll back what they
+write, and they can't see rows this thread hasn't committed. With a real
+test database, setup rows are committed where the tools can see them,
+each case starts from nothing, and your real data is never touched.
 
 Usage:
     python manage.py run_evals
@@ -16,10 +20,11 @@ Usage:
 from contextlib import nullcontext
 from unittest.mock import patch
 
+from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection
 
-from chat.agent.eval_cases import EVAL_CASES
+from chat.agent.eval_cases import ANY_TOOL, EVAL_CASES
 from chat.agent.orchestrator import run_agent
 
 
@@ -48,13 +53,15 @@ def _run_case(case) -> tuple:
     )
     try:
         with pin_now:
-            result = run_agent(case.input, prior_messages=[])
+            result = run_agent(case.input, prior_messages=[], guest_email=case.guest_email)
     except Exception as exc:  # noqa: BLE001 - eval harness must not crash on a bad case
         return False, [f"agent raised {type(exc).__name__}: {exc}"], ""
 
     failures = []
     tool_names = [call["name"] for call in result["tool_calls"]]
-    if case.expected_tool is None:
+    if case.expected_tool == ANY_TOOL:
+        pass
+    elif case.expected_tool is None:
         if tool_names:
             failures.append(f"tool: expected none, got {tool_names!r}")
     elif case.expected_tool not in tool_names:
@@ -69,6 +76,9 @@ def _run_case(case) -> tuple:
     for substring in case.expected_reply_contains:
         if substring.lower() not in reply.lower():
             failures.append(f"reply missing expected substring {substring!r}")
+    for substring in case.forbidden_reply_contains:
+        if substring.lower() in reply.lower():
+            failures.append(f"reply contains forbidden substring {substring!r}")
 
     return not failures, failures, reply
 
@@ -93,8 +103,11 @@ class Command(BaseCommand):
         passed_count = 0
         failed_names = []
 
-        with transaction.atomic():
+        real_db_name = connection.settings_dict["NAME"]
+        connection.creation.create_test_db(verbosity=0, autoclobber=True)
+        try:
             for case in cases:
+                call_command("flush", interactive=False, verbosity=0)
                 passed, failures, reply = _run_case(case)
                 if passed:
                     passed_count += 1
@@ -106,10 +119,8 @@ class Command(BaseCommand):
                         self.stdout.write(f"        - {failure}")
                 reply_preview = (reply[:100] + "...") if len(reply) > 100 else reply
                 self.stdout.write(f"        reply: {reply_preview!r}\n")
-
-            # Nothing this run created (menu items, reservations) should
-            # persist - it's an eval run, not real restaurant data.
-            transaction.set_rollback(True)
+        finally:
+            connection.creation.destroy_test_db(real_db_name, verbosity=0)
 
         total = len(cases)
         self.stdout.write(f"\n{passed_count}/{total} passed")
