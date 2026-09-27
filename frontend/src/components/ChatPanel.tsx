@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useStartNewConversation } from "../hooks/useConversation";
+import { useEnsureConversation } from "../hooks/useConversation";
 import { useStreamMessage } from "../hooks/useStreamMessage";
 import { listMessages } from "../lib/api";
 import { toolLabel } from "../lib/toolLabels";
@@ -27,23 +27,28 @@ function toBubble(message: Message): ChatBubble {
 }
 
 interface ChatPanelProps {
-  /**
-   * App renders this with key={conversationId}, so starting a new chat
-   * remounts the panel with fresh state instead of resetting it by hand.
-   */
+  /** False while App is still loading the saved conversation, if any. */
+  ready: boolean;
+  /** Null until the first message (or a sign-in) creates the conversation. */
   conversationId: string | null;
+  /**
+   * Forgets the conversation and remounts this panel with fresh state
+   * (App keys it on a "New chat" counter).
+   */
+  onNewChat: () => void;
 }
 
-export default function ChatPanel({ conversationId }: ChatPanelProps) {
+export default function ChatPanel({ ready, conversationId, onNewChat }: ChatPanelProps) {
   // Messages sent since this conversation was opened; earlier ones come
   // from the saved history below.
   const [sessionMessages, setSessionMessages] = useState<ChatBubble[]>([]);
   const [input, setInput] = useState("");
-  const [newChatError, setNewChatError] = useState<string | null>(null);
-  const [startingNewChat, setStartingNewChat] = useState(false);
+  // True while the first message is creating the conversation, before
+  // streaming starts, so a second click can't send twice.
+  const [starting, setStarting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { send, isStreaming, statusText, answerText, tools, cards } = useStreamMessage();
-  const startNewConversation = useStartNewConversation();
+  const ensureConversation = useEnsureConversation();
 
   // Saved history: on first load, after a page reload, and after "New chat".
   const history = useQuery({
@@ -56,7 +61,9 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
   // props and MessageBubble's memo can skip re-rendering it.
   const historyBubbles = useMemo(() => (history.data ?? []).map(toBubble), [history.data]);
   const messages = [...historyBubbles, ...sessionMessages];
-  const historyLoading = history.isPending;
+  // A disabled query (no conversation yet) also reports isPending, so only
+  // count it as loading when there's a conversation to load.
+  const historyLoading = !ready || (!!conversationId && history.isPending);
 
   // Depends on the count, not the array: `messages` is a new array every
   // render, which would scroll on every keystroke.
@@ -65,45 +72,40 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount, isStreaming, answerText, statusText, cards.length]);
 
-  const canSend = !!conversationId && !historyLoading && !isStreaming;
+  const canSend = !historyLoading && !isStreaming && !starting;
 
-  function handleSend(text: string) {
+  function showError(message: string) {
+    setSessionMessages((prev) => [...prev, { role: "assistant", content: message, isError: true }]);
+  }
+
+  async function handleSend(text: string) {
     const content = text.trim();
-    if (!content || !conversationId || !canSend) return;
+    if (!content || !canSend) return;
 
     setSessionMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
 
+    // The conversation is created here, on the first message, rather than
+    // when the page loads.
+    setStarting(true);
+    let id: string;
+    try {
+      id = (await ensureConversation()).id;
+    } catch (err) {
+      showError(`Couldn't start the conversation: ${(err as Error).message}`);
+      return;
+    } finally {
+      setStarting(false);
+    }
+
     send({
-      conversationId,
+      conversationId: id,
       content,
       onDone: (reply) => {
         setSessionMessages((prev) => [...prev, toBubble(reply)]);
       },
-      onError: (err) => {
-        setSessionMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `Something went wrong talking to the assistant: ${err.message}`,
-            isError: true,
-          },
-        ]);
-      },
+      onError: (err) => showError(`Something went wrong talking to the assistant: ${err.message}`),
     });
-  }
-
-  async function handleNewChat() {
-    setNewChatError(null);
-    setStartingNewChat(true);
-    try {
-      // On success this panel remounts for the new conversation, so there's
-      // no state to reset here.
-      await startNewConversation();
-    } catch {
-      setNewChatError("Couldn't start a new chat. Check your connection and try again.");
-      setStartingNewChat(false);
-    }
   }
 
   const lastTool = tools[tools.length - 1];
@@ -112,13 +114,12 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-stone-200 bg-white px-4 py-2">
-        <span className={`text-xs ${newChatError ? "text-red-600" : "text-stone-500"}`}>
-          {newChatError ??
-            (history.isError ? "Couldn't load earlier messages." : "Chat")}
+        <span className="text-xs text-stone-500">
+          {history.isError ? "Couldn't load earlier messages." : "Chat"}
         </span>
         <button
-          onClick={handleNewChat}
-          disabled={isStreaming || startingNewChat || messages.length === 0}
+          onClick={onNewChat}
+          disabled={isStreaming || starting || messages.length === 0}
           title="Starts a new conversation. You'll be signed out."
           className="rounded-full border border-stone-300 px-3 py-0.5 text-xs text-stone-600 hover:border-amber-500 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -203,8 +204,8 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
           id="chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          disabled={!conversationId}
-          placeholder={conversationId ? "Type a message…" : "Starting conversation…"}
+          disabled={historyLoading}
+          placeholder={historyLoading ? "Loading…" : "Type a message…"}
           className="flex-1 rounded-full border border-stone-300 px-4 py-2 text-sm focus:border-amber-500 focus:outline-none disabled:bg-stone-100"
         />
         <button

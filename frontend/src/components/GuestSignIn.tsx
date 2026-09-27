@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEnsureConversation } from "../hooks/useConversation";
 import { ApiError, logout, requestLoginCode, verifyLoginCode } from "../lib/api";
 import type { Conversation } from "../lib/types";
 import MockInbox from "./MockInbox";
 
 interface GuestSignInProps {
-  conversation: Conversation | undefined;
+  /** Null until the guest's first message or sign-in creates one. */
+  conversation: Conversation | null;
 }
 
 type Step = "email" | "code";
@@ -25,9 +27,8 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  if (!conversation) return null;
-  const conversationId = conversation.id;
+  const ensureConversation = useEnsureConversation();
+  const signedInEmail = conversation?.guest_email ?? "";
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -43,7 +44,10 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
 
   const sendCode = () =>
     run(async () => {
-      await requestLoginCode(conversationId, email);
+      // Sign-in belongs to a conversation, so this is the other action
+      // (besides sending a message) that creates one.
+      const { id } = await ensureConversation();
+      await requestLoginCode(id, email);
       setCode("");
       setStep("code");
       queryClient.invalidateQueries({ queryKey: ["mock-inbox"] });
@@ -51,7 +55,8 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
 
   const verify = () =>
     run(async () => {
-      const updated = await verifyLoginCode(conversationId, email, code);
+      const { id } = await ensureConversation();
+      const updated = await verifyLoginCode(id, email, code);
       queryClient.setQueryData(["conversation"], updated);
       setStep("email");
       setCode("");
@@ -59,7 +64,8 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
 
   const signOut = () =>
     run(async () => {
-      const updated = await logout(conversationId);
+      if (!conversation) return;
+      const updated = await logout(conversation.id);
       queryClient.setQueryData(["conversation"], updated);
     });
 
@@ -69,11 +75,11 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
         Your bookings
       </h2>
 
-      {conversation.guest_email ? (
+      {signedInEmail ? (
         <div className="space-y-2">
           <p className="text-sm text-stone-700">
             Signed in as{" "}
-            <span className="font-medium text-stone-900">{conversation.guest_email}</span>.
+            <span className="font-medium text-stone-900">{signedInEmail}</span>.
             Ask the assistant about your bookings, no code needed.
           </p>
           <button
@@ -165,7 +171,7 @@ export default function GuestSignIn({ conversation }: GuestSignInProps) {
 
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
 
-      {!conversation.guest_email ? (
+      {!signedInEmail ? (
         <MockInbox onUseCode={step === "code" ? setCode : undefined} />
       ) : null}
     </section>
