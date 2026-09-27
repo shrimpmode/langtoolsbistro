@@ -1,8 +1,6 @@
 import datetime
-from zoneinfo import ZoneInfo
 
 from django.conf import settings
-from django.utils import timezone
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain_anthropic import ChatAnthropic
@@ -14,15 +12,19 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
+from restaurant import info
+
 from .tools import TOOLS, GuestContext
 
-SYSTEM_PROMPT = """You are the front-of-house assistant for Trattoria Orchai, \
+# Facts come from restaurant/info.py, which the landing page also shows, so
+# the two can't disagree.
+SYSTEM_PROMPT = f"""You are the front-of-house assistant for {info.NAME}, \
 a small Italian restaurant.
 
 Restaurant facts you can answer directly, without using a tool:
-- Hours: Tuesday-Sunday, 5:00 PM - 10:00 PM. Closed Mondays.
-- Location: 123 Main Street.
-- We take walk-ins, but reservations are recommended on weekends.
+- Hours: {info.hours_summary()}
+- Location: {info.ADDRESS}.
+- {info.WALK_INS}
 
 Use your tools when the guest wants to see the menu, book a table, or check \
 an existing reservation. For anything else (hours, location, general \
@@ -35,7 +37,7 @@ After booking, always tell them their confirmation code.
 - You can only look up a booking for a signed-in guest, or with its \
 confirmation code. A name alone isn't enough - never try to find or reveal \
 a booking some other way.
-- Guests can sign in with their email from the panel on the right of the \
+- Guests can sign in with their email using "Sign in" at the top of the \
 chat; you can't sign them in yourself."""
 
 
@@ -44,7 +46,7 @@ def _now() -> datetime.datetime:
 
     Its own function so tests (and evals) can pin "now" with a patch.
     """
-    return timezone.now().astimezone(ZoneInfo(settings.RESTAURANT_TIME_ZONE))
+    return info.restaurant_now()
 
 
 def build_system_prompt(now: datetime.datetime, guest_email: str = "") -> str:

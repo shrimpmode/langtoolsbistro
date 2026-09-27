@@ -1,4 +1,11 @@
-import type { Conversation, Message, MenuItem, MockEmail, ToolArtifact } from "./types";
+import type {
+  Conversation,
+  Message,
+  MenuItem,
+  MockEmail,
+  RestaurantDetails,
+  ToolArtifact,
+} from "./types";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8010/api";
@@ -148,4 +155,8 @@ export function logout(conversationId: string): Promise<Conversation> {
 /** Emails the mock email service "sent". The endpoint 404s outside dev. */
 export function getMockInbox(): Promise<MockEmail[]> {
   return request("/mock-inbox/");
+}
+
+export function getRestaurant(): Promise<RestaurantDetails> {
+  return request("/restaurant/");
 }
