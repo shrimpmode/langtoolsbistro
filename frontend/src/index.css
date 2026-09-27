@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Plain values rather than @apply with the custom theme colors: if the
+ * stylesheet can't resolve a theme class (e.g. a dev server still holding
+ * an older tailwind.config.js), @apply fails the whole file and the app
+ * doesn't load at all. Keep these in sync with the theme in
+ * tailwind.config.js (linen, ink, body font).
+ */
 body {
-  @apply bg-stone-100 text-stone-900;
+  background-color: #f6f2ea;
+  color: #1f211b;
+  font-family: Karla, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }

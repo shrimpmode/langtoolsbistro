@@ -61,3 +61,23 @@ export interface ChatBubble {
   cards?: ToolArtifact[];
   isError?: boolean;
 }
+
+export interface OpeningHours {
+  weekday: string;
+  open: string | null; // "HH:MM", null when closed all day
+  close: string | null;
+}
+
+export interface RestaurantDetails {
+  name: string;
+  tagline: string;
+  address: string;
+  walk_ins: string;
+  hours: OpeningHours[]; // Monday first
+  today: string; // weekday name, in the restaurant's time zone
+  status: {
+    open_now: boolean;
+    closes_at: string | null;
+    next_opening: { date: string; weekday: string; time: string } | null;
+  };
+}

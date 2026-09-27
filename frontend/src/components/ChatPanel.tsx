@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useEnsureConversation } from "../hooks/useConversation";
 import { useStreamMessage } from "../hooks/useStreamMessage";
@@ -36,9 +36,26 @@ interface ChatPanelProps {
    * (App keys it on a "New chat" counter).
    */
   onNewChat: () => void;
+  onClose: () => void;
+  /** Shown under the header, e.g. the sign-in strip. */
+  banner?: ReactNode;
+  /**
+   * A message the landing page wants sent ("I'd like to book a table.").
+   * Sent as soon as the panel can send, then cleared via onPendingMessageSent.
+   */
+  pendingMessage: string | null;
+  onPendingMessageSent: () => void;
 }
 
-export default function ChatPanel({ ready, conversationId, onNewChat }: ChatPanelProps) {
+export default function ChatPanel({
+  ready,
+  conversationId,
+  onNewChat,
+  onClose,
+  banner,
+  pendingMessage,
+  onPendingMessageSent,
+}: ChatPanelProps) {
   // Messages sent since this conversation was opened; earlier ones come
   // from the saved history below.
   const [sessionMessages, setSessionMessages] = useState<ChatBubble[]>([]);
@@ -73,6 +90,15 @@ export default function ChatPanel({ ready, conversationId, onNewChat }: ChatPane
   }, [messageCount, isStreaming, answerText, statusText, cards.length]);
 
   const canSend = !historyLoading && !isStreaming && !starting;
+
+  // Waits for canSend, so a message from the landing page isn't lost while
+  // history is loading or an earlier reply is still streaming.
+  useEffect(() => {
+    if (!pendingMessage || !canSend) return;
+    onPendingMessageSent();
+    handleSend(pendingMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSend changes every render
+  }, [pendingMessage, canSend]);
 
   function showError(message: string) {
     setSessionMessages((prev) => [...prev, { role: "assistant", content: message, isError: true }]);
@@ -114,18 +140,29 @@ export default function ChatPanel({ ready, conversationId, onNewChat }: ChatPane
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-stone-200 bg-white px-4 py-2">
-        <span className="text-xs text-stone-500">
-          {history.isError ? "Couldn't load earlier messages." : "Chat"}
+        <span className="text-sm font-semibold text-stone-700">
+          {history.isError ? "Couldn't load earlier messages." : "Chat with us"}
         </span>
-        <button
-          onClick={onNewChat}
-          disabled={isStreaming || starting || messages.length === 0}
-          title="Starts a new conversation. You'll be signed out."
-          className="rounded-full border border-stone-300 px-3 py-0.5 text-xs text-stone-600 hover:border-amber-500 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          New chat
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onNewChat}
+            disabled={isStreaming || starting || messages.length === 0}
+            title="Starts a new conversation. You'll be signed out."
+            className="rounded-full border border-stone-300 px-3 py-0.5 text-xs text-stone-600 hover:border-amber-500 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            New chat
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close chat"
+            className="rounded-full px-2 py-0.5 text-lg leading-none text-stone-500 hover:bg-stone-100 hover:text-stone-800"
+          >
+            ×
+          </button>
+        </div>
       </div>
+      {banner}
 
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
         {historyLoading ? (
