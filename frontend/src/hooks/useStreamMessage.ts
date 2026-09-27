@@ -4,8 +4,17 @@ import type { Message } from "../lib/types";
 
 interface StreamState {
   isStreaming: boolean;
-  streamedText: string;
-  streamingTool: string | null;
+  /**
+   * Text the model wrote before calling a tool ("Let me check that for
+   * you!"). Shown faded as a status line: the backend doesn't save it as
+   * part of the reply, so showing it as the answer would make the text
+   * change when the stream finishes.
+   */
+  statusText: string;
+  /** Text since the last tool call: the part that becomes the saved reply. */
+  answerText: string;
+  /** Tools started so far this turn, in order. */
+  tools: string[];
 }
 
 interface SendArgs {
@@ -17,8 +26,9 @@ interface SendArgs {
 
 const initialState: StreamState = {
   isStreaming: false,
-  streamedText: "",
-  streamingTool: null,
+  statusText: "",
+  answerText: "",
+  tools: [],
 };
 
 export function useStreamMessage() {
@@ -27,44 +37,39 @@ export function useStreamMessage() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const send = useCallback(
-    ({ conversationId, content, onDone, onError }: SendArgs) => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
+  const send = useCallback(({ conversationId, content, onDone, onError }: SendArgs) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      setState({ isStreaming: true, streamedText: "", streamingTool: null });
+    setState({ ...initialState, isStreaming: true });
 
-      streamMessage(
-        conversationId,
-        content,
-        {
-          onToken: (text) =>
-            setState((prev) => ({ ...prev, streamedText: prev.streamedText + text })),
-          onToolStart: (tool) =>
-            setState((prev) => ({
-              ...prev,
-              streamingTool: tool,
-              // Visually separate a spoken preamble ("I'll check that for
-              // you!") from whatever text follows the tool call - the
-              // backend only strips the preamble from the persisted reply,
-              // not from what's shown live while streaming.
-              streamedText: prev.streamedText ? prev.streamedText + "\n" : prev.streamedText,
-            })),
-          onDone: (message) => {
-            setState(initialState);
-            onDone(message);
-          },
+    streamMessage(
+      conversationId,
+      content,
+      {
+        onToken: (text) => setState((prev) => ({ ...prev, answerText: prev.answerText + text })),
+        onToolStart: (tool) =>
+          setState((prev) => ({
+            ...prev,
+            tools: [...prev.tools, tool],
+            // Whatever was written before this tool call was a preamble,
+            // not the answer, so move it to the status line.
+            statusText: [prev.statusText, prev.answerText.trim()].filter(Boolean).join(" "),
+            answerText: "",
+          })),
+        onDone: (message) => {
+          setState(initialState);
+          onDone(message);
         },
-        controller.signal
-      ).catch((err: Error) => {
-        if (controller.signal.aborted) return;
-        setState(initialState);
-        onError(err);
-      });
-    },
-    []
-  );
+      },
+      controller.signal
+    ).catch((err: Error) => {
+      if (controller.signal.aborted) return;
+      setState(initialState);
+      onError(err);
+    });
+  }, []);
 
   return { ...state, send };
 }

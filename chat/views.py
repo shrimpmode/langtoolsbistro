@@ -24,6 +24,15 @@ class ConversationCreateView(APIView):
         )
 
 
+class ConversationDetailView(APIView):
+    """Lets the UI restore a conversation after a page reload, including
+    whether the guest is still signed in (guest_email)."""
+
+    def get(self, request, conversation_id):
+        conversation = get_object_or_404(Conversation, id=conversation_id)
+        return Response(ConversationSerializer(conversation).data)
+
+
 class MessageListCreateView(APIView):
     def get(self, request, conversation_id):
         conversation = get_object_or_404(Conversation, id=conversation_id)
