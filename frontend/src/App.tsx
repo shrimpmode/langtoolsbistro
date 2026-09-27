@@ -25,7 +25,7 @@ export default function App() {
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[2fr_1fr]">
           <div className="min-h-0 border-r border-stone-200">
-            <ChatPanel conversationId={conversationId} />
+            <ChatPanel key={conversationId} conversationId={conversationId} />
           </div>
           <div className="min-h-0 overflow-y-auto border-t border-stone-200 md:border-t-0">
             <GuestSignIn key={conversationId} conversation={conversation} />

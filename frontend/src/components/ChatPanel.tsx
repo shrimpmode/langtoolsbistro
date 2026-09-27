@@ -1,4 +1,5 @@
-import { useRef, useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useStartNewConversation } from "../hooks/useConversation";
 import { useStreamMessage } from "../hooks/useStreamMessage";
 import { listMessages } from "../lib/api";
@@ -14,8 +15,6 @@ const SUGGESTIONS = [
   "What time do you close?",
 ];
 
-type HistoryState = "loading" | "ready" | "error";
-
 function toBubble(message: Message): ChatBubble {
   return {
     role: message.role,
@@ -28,59 +27,61 @@ function toBubble(message: Message): ChatBubble {
 }
 
 interface ChatPanelProps {
+  /**
+   * App renders this with key={conversationId}, so starting a new chat
+   * remounts the panel with fresh state instead of resetting it by hand.
+   */
   conversationId: string | null;
 }
 
 export default function ChatPanel({ conversationId }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatBubble[]>([]);
-  const [historyState, setHistoryState] = useState<HistoryState>("loading");
+  // Messages sent since this conversation was opened; earlier ones come
+  // from the saved history below.
+  const [sessionMessages, setSessionMessages] = useState<ChatBubble[]>([]);
   const [input, setInput] = useState("");
+  const [newChatError, setNewChatError] = useState<string | null>(null);
+  const [startingNewChat, setStartingNewChat] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { send, isStreaming, statusText, answerText, tools, cards } = useStreamMessage();
   const startNewConversation = useStartNewConversation();
 
-  // Load the saved history whenever the conversation changes: on first
-  // load, after a page reload, and after "New chat".
-  useEffect(() => {
-    if (!conversationId) return;
-    let cancelled = false;
-    setMessages([]);
-    setHistoryState("loading");
-    listMessages(conversationId)
-      .then((history) => {
-        if (cancelled) return;
-        setMessages(history.map(toBubble));
-        setHistoryState("ready");
-      })
-      .catch(() => {
-        if (!cancelled) setHistoryState("error");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId]);
+  // Saved history: on first load, after a page reload, and after "New chat".
+  const history = useQuery({
+    queryKey: ["messages", conversationId],
+    queryFn: () => listMessages(conversationId!),
+    enabled: !!conversationId,
+    staleTime: Infinity,
+  });
+  // Built once per fetch, not per render, so each bubble keeps the same
+  // props and MessageBubble's memo can skip re-rendering it.
+  const historyBubbles = useMemo(() => (history.data ?? []).map(toBubble), [history.data]);
+  const messages = [...historyBubbles, ...sessionMessages];
+  const historyLoading = history.isPending;
 
+  // Depends on the count, not the array: `messages` is a new array every
+  // render, which would scroll on every keystroke.
+  const messageCount = messages.length;
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isStreaming, answerText, statusText]);
+  }, [messageCount, isStreaming, answerText, statusText, cards.length]);
 
-  const canSend = !!conversationId && historyState !== "loading" && !isStreaming;
+  const canSend = !!conversationId && !historyLoading && !isStreaming;
 
   function handleSend(text: string) {
     const content = text.trim();
     if (!content || !conversationId || !canSend) return;
 
-    setMessages((prev) => [...prev, { role: "user", content }]);
+    setSessionMessages((prev) => [...prev, { role: "user", content }]);
     setInput("");
 
     send({
       conversationId,
       content,
       onDone: (reply) => {
-        setMessages((prev) => [...prev, toBubble(reply)]);
+        setSessionMessages((prev) => [...prev, toBubble(reply)]);
       },
       onError: (err) => {
-        setMessages((prev) => [
+        setSessionMessages((prev) => [
           ...prev,
           {
             role: "assistant",
@@ -92,18 +93,32 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
     });
   }
 
+  async function handleNewChat() {
+    setNewChatError(null);
+    setStartingNewChat(true);
+    try {
+      // On success this panel remounts for the new conversation, so there's
+      // no state to reset here.
+      await startNewConversation();
+    } catch {
+      setNewChatError("Couldn't start a new chat. Check your connection and try again.");
+      setStartingNewChat(false);
+    }
+  }
+
   const lastTool = tools[tools.length - 1];
   const toolIsRunning = !!lastTool && !answerText;
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-stone-200 bg-white px-4 py-2">
-        <span className="text-xs text-stone-500">
-          {historyState === "error" ? "Couldn't load earlier messages." : "Chat"}
+        <span className={`text-xs ${newChatError ? "text-red-600" : "text-stone-500"}`}>
+          {newChatError ??
+            (history.isError ? "Couldn't load earlier messages." : "Chat")}
         </span>
         <button
-          onClick={() => startNewConversation()}
-          disabled={isStreaming || messages.length === 0}
+          onClick={handleNewChat}
+          disabled={isStreaming || startingNewChat || messages.length === 0}
           title="Starts a new conversation. You'll be signed out."
           className="rounded-full border border-stone-300 px-3 py-0.5 text-xs text-stone-600 hover:border-amber-500 hover:text-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -112,7 +127,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
-        {historyState === "loading" ? (
+        {historyLoading ? (
           <p className="pt-8 text-center text-sm text-stone-400">Loading your conversation…</p>
         ) : messages.length === 0 ? (
           <div className="mx-auto max-w-sm space-y-3 pt-8 text-center">

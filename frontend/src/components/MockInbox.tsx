@@ -3,7 +3,11 @@ import { getMockInbox } from "../lib/api";
 import type { MockEmail } from "../lib/types";
 
 interface MockInboxProps {
-  /** When set, each email with a code gets a button that fills it in. */
+  /**
+   * Set while the guest is waiting for a sign-in code. The inbox then
+   * checks for new mail every few seconds and offers to fill codes in.
+   * Otherwise it loads once and doesn't poll.
+   */
   onUseCode?: (code: string) => void;
 }
 
@@ -15,7 +19,7 @@ export default function MockInbox({ onUseCode }: MockInboxProps) {
   const { data: emails, isError } = useQuery<MockEmail[]>({
     queryKey: ["mock-inbox"],
     queryFn: getMockInbox,
-    refetchInterval: 3000,
+    refetchInterval: onUseCode ? 3000 : false,
     retry: false,
   });
 

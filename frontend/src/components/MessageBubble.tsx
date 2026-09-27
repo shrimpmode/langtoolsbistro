@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { toolLabel } from "../lib/toolLabels";
 import type { ToolArtifact } from "../lib/types";
 import BookingCards from "./BookingCard";
@@ -23,7 +24,11 @@ export function ToolChip({ label, active = false }: { label: string; active?: bo
   );
 }
 
-export default function MessageBubble({
+// memo: while a reply streams, ChatPanel re-renders on every token (and on
+// every keystroke in the input). Without memo, every earlier message would
+// re-render and re-parse its Markdown each time. Saved messages keep the
+// same props, so memo lets React skip them.
+const MessageBubble = memo(function MessageBubble({
   role,
   content,
   toolsUsed,
@@ -61,7 +66,9 @@ export default function MessageBubble({
       </div>
     </div>
   );
-}
+});
+
+export default MessageBubble;
 
 /** Booking cards, shown above the reply text both while streaming and after. */
 export function CardList({ cards }: { cards: ToolArtifact[] }) {
