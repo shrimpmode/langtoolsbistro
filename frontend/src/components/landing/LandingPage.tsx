@@ -6,6 +6,11 @@ import OpenStatus from "./OpenStatus";
 import VisitSection from "./VisitSection";
 
 interface LandingPageProps {
+  /**
+   * The chat is open. From lg up it's docked to the right half of the
+   * window, so the page makes room for it and uses its narrower layout.
+   */
+  docked: boolean;
   /** Opens the chat; with a message, sends it as the guest's first line. */
   onOpenChat: (message?: string) => void;
   /** Opens the chat with the sign-in form showing. */
@@ -14,7 +19,7 @@ interface LandingPageProps {
 
 const BOOK_MESSAGE = "I'd like to book a table.";
 
-export default function LandingPage({ onOpenChat, onFindBooking }: LandingPageProps) {
+export default function LandingPage({ docked, onOpenChat, onFindBooking }: LandingPageProps) {
   const { data: restaurant } = useRestaurant();
   const [question, setQuestion] = useState("");
   const name = restaurant?.name ?? "Trattoria Orchai";
@@ -28,23 +33,30 @@ export default function LandingPage({ onOpenChat, onFindBooking }: LandingPagePr
   }
 
   const book = () => onOpenChat(BOOK_MESSAGE);
+  // With the chat docked the page is only half the window wide, so the
+  // header links wait for a wider window before showing.
+  const navLink = `hover:text-tomato hidden ${docked ? "xl:inline" : "md:inline"}`;
 
   return (
     // Bottom padding leaves room for the phone action bar.
-    <div className="min-h-screen pb-20 md:pb-0">
+    <div
+      className={`min-h-screen pb-20 transition-[padding] duration-300 motion-reduce:transition-none md:pb-0 ${
+        docked ? "lg:pr-[50vw]" : ""
+      }`}
+    >
       <header className="sticky top-0 z-20 border-b border-rule bg-linen/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-3">
           <a href="#top" className="font-display text-2xl leading-none">
             {name}
           </a>
           <nav className="flex items-center gap-6 text-sm font-semibold">
-            <a href="#menu" className="hidden hover:text-tomato md:inline">
+            <a href="#menu" className={navLink}>
               Menu
             </a>
-            <a href="#visit" className="hidden hover:text-tomato md:inline">
+            <a href="#visit" className={navLink}>
               Visit
             </a>
-            <button type="button" onClick={onFindBooking} className="hidden hover:text-tomato md:inline">
+            <button type="button" onClick={onFindBooking} className={navLink}>
               Find my booking
             </button>
             <button
@@ -114,8 +126,8 @@ export default function LandingPage({ onOpenChat, onFindBooking }: LandingPagePr
           </form>
         </section>
 
-        <MenuSection onAsk={onOpenChat} />
-        <VisitSection restaurant={restaurant} onBook={book} />
+        <MenuSection docked={docked} onAsk={onOpenChat} />
+        <VisitSection docked={docked} restaurant={restaurant} onBook={book} />
 
         <section id="booking" className="scroll-mt-20 border-t border-rule">
           <div className="mx-auto max-w-5xl px-5 py-16 md:py-20">

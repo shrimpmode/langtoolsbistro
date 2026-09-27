@@ -2,15 +2,22 @@ import { formatClock } from "../../lib/formatTime";
 import type { RestaurantDetails } from "../../lib/types";
 
 export default function VisitSection({
+  docked,
   restaurant,
   onBook,
 }: {
+  /** Chat docked beside the page: two columns only on wider windows. */
+  docked: boolean;
   restaurant: RestaurantDetails | undefined;
   onBook: () => void;
 }) {
   return (
     <section id="visit" className="scroll-mt-20 border-t border-rule bg-olive-soft/60">
-      <div className="mx-auto grid max-w-5xl gap-12 px-5 py-16 md:grid-cols-2 md:py-20">
+      <div
+        className={`mx-auto grid max-w-5xl gap-12 px-5 py-16 md:py-20 ${
+          docked ? "xl:grid-cols-2" : "md:grid-cols-2"
+        }`}
+      >
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-olive">Visit</p>
           <h2 className="mt-2 font-display text-4xl md:text-5xl">Find us</h2>

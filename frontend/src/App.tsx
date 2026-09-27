@@ -41,7 +41,7 @@ export default function App() {
 
   return (
     <>
-      <LandingPage onOpenChat={openChat} onFindBooking={findBooking} />
+      <LandingPage docked={chatOpen} onOpenChat={openChat} onFindBooking={findBooking} />
       <ChatDrawer
         open={chatOpen}
         onClose={closeChat}

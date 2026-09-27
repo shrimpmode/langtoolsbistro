@@ -29,7 +29,14 @@ function Dish({ item }: { item: MenuItem }) {
   );
 }
 
-export default function MenuSection({ onAsk }: { onAsk: (message: string) => void }) {
+export default function MenuSection({
+  docked,
+  onAsk,
+}: {
+  /** Chat docked beside the page: two columns only on wider windows. */
+  docked: boolean;
+  onAsk: (message: string) => void;
+}) {
   const { data: menu, isLoading, error } = useMenu();
 
   const byCategory = (menu ?? []).reduce<Partial<Record<MenuCategory, MenuItem[]>>>((acc, item) => {
@@ -49,7 +56,7 @@ export default function MenuSection({ onAsk }: { onAsk: (message: string) => voi
         ) : isLoading ? (
           <p className="mt-10 text-muted">Loading the menu…</p>
         ) : (
-          <div className="mt-10 grid gap-x-16 gap-y-12 md:grid-cols-2">
+          <div className={`mt-10 grid gap-x-16 gap-y-12 ${docked ? "xl:grid-cols-2" : "md:grid-cols-2"}`}>
             {CATEGORY_ORDER.filter((c) => byCategory[c]?.length).map((category) => (
               <div key={category}>
                 <h3 className="border-b border-rule pb-2 font-display text-2xl text-olive">

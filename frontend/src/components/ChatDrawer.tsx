@@ -105,7 +105,10 @@ export default function ChatDrawer({
       <aside
         role="dialog"
         aria-label="Chat with the restaurant"
-        className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col bg-stone-100 font-sans shadow-2xl transition-[transform,visibility] duration-300 motion-reduce:transition-none ${
+        // Phones: full screen. Tablets: a panel over the page. From lg up:
+        // docked to the right half, with the landing page reflowing into
+        // the left half (see LandingPage's `docked`).
+        className={`fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col bg-stone-100 font-sans shadow-2xl transition-[transform,visibility] duration-300 motion-reduce:transition-none lg:w-1/2 lg:max-w-none lg:border-l lg:border-stone-200 lg:shadow-none ${
           open ? "visible translate-x-0" : "invisible translate-x-full"
         }`}
       >
