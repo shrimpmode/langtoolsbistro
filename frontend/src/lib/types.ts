@@ -9,8 +9,13 @@ export interface Message {
   id: number;
   role: MessageRole;
   content: string;
-  tool_used: string;
+  tool_calls: ToolCall[];
   created_at: string;
+}
+
+export interface ToolCall {
+  name: string;
+  args: Record<string, unknown>;
 }
 
 export type MenuCategory = "appetizer" | "main" | "dessert" | "drink";
@@ -27,6 +32,6 @@ export interface MenuItem {
 export interface ChatBubble {
   role: MessageRole;
   content: string;
-  toolUsed?: string;
+  toolsUsed?: string[];
   isError?: boolean;
 }

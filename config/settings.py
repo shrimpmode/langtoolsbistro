@@ -92,6 +92,10 @@ REST_FRAMEWORK = {
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5")
 
+# The restaurant's local time zone - what "today" and "tonight" mean to a
+# guest. Deliberately separate from TIME_ZONE, which stays UTC for storage.
+RESTAURANT_TIME_ZONE = os.environ.get("RESTAURANT_TIME_ZONE", "America/New_York")
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]

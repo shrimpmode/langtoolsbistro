@@ -40,7 +40,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
           {
             role: "assistant",
             content: reply.content,
-            toolUsed: reply.tool_used,
+            toolsUsed: reply.tool_calls.map((call) => call.name),
           },
         ]);
       },
@@ -83,7 +83,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
               key={i}
               role={m.role}
               content={m.content}
-              toolUsed={m.toolUsed}
+              toolsUsed={m.toolsUsed}
               isError={m.isError}
             />
           ))
@@ -93,7 +93,7 @@ export default function ChatPanel({ conversationId }: ChatPanelProps) {
             <MessageBubble
               role="assistant"
               content={streamedText}
-              toolUsed={streamingTool ?? undefined}
+              toolsUsed={streamingTool ? [streamingTool] : undefined}
             />
           ) : (
             <div className="flex justify-start">

@@ -8,3 +8,9 @@ node_modules/
 frontend/dist/
 *.tsbuildinfo
 learning/
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+coverage/

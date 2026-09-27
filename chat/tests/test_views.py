@@ -30,8 +30,8 @@ class MessageListCreateViewTests(TestCase):
     def test_posting_a_message_persists_both_turns(self, mock_run_agent):
         mock_run_agent.return_value = {
             "reply": "We're open 5-10pm Tuesday-Sunday.",
-            "tool_used": "",
-            "tool_input": {},
+            "tool_calls": [],
+            "turn_messages": [],
         }
 
         response = self.client.post(
@@ -40,7 +40,7 @@ class MessageListCreateViewTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["content"], "We're open 5-10pm Tuesday-Sunday.")
-        self.assertEqual(response.data["tool_used"], "")
+        self.assertEqual(response.data["tool_calls"], [])
 
         messages = list(self.conversation.messages.all())
         self.assertEqual(len(messages), 2)
@@ -49,25 +49,35 @@ class MessageListCreateViewTests(TestCase):
         self.assertEqual(messages[1].role, Message.Role.ASSISTANT)
 
     @patch("chat.views.run_agent")
-    def test_tool_used_is_recorded_on_the_assistant_message(self, mock_run_agent):
+    def test_tool_calls_and_turn_are_recorded_on_the_assistant_message(self, mock_run_agent):
+        tool_calls = [
+            {"name": "list_menu", "args": {}},
+            {"name": "create_reservation", "args": {"customer_name": "Alex"}},
+        ]
+        turn_messages = [{"type": "ai", "data": {"content": "Booked!"}}]
         mock_run_agent.return_value = {
             "reply": "Booked!",
-            "tool_used": "create_reservation",
-            "tool_input": {"customer_name": "Alex"},
+            "tool_calls": tool_calls,
+            "turn_messages": turn_messages,
         }
 
-        self.client.post(
+        response = self.client.post(
             self.url, {"content": "Book a table for 2"}, content_type="application/json"
         )
 
         assistant_message = self.conversation.messages.get(role=Message.Role.ASSISTANT)
-        self.assertEqual(assistant_message.tool_used, "create_reservation")
+        self.assertEqual(assistant_message.tool_calls, tool_calls)
+        self.assertEqual(assistant_message.turn_messages, turn_messages)
+        self.assertEqual(response.data["tool_calls"], tool_calls)
+        # turn_messages is internal replay state (it can include the model's
+        # thinking blocks) - it shouldn't leak out over the API.
+        self.assertNotIn("turn_messages", response.data)
 
     @patch("chat.views.run_agent")
     def test_run_agent_receives_prior_messages_before_the_new_one_is_saved(
         self, mock_run_agent
     ):
-        mock_run_agent.return_value = {"reply": "ok", "tool_used": "", "tool_input": {}}
+        mock_run_agent.return_value = {"reply": "ok", "tool_calls": [], "turn_messages": []}
         Message.objects.create(
             conversation=self.conversation, role=Message.Role.USER, content="hi"
         )

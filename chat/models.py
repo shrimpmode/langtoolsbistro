@@ -21,7 +21,13 @@ class Message(models.Model):
     )
     role = models.CharField(max_length=20, choices=Role.choices)
     content = models.TextField()
-    tool_used = models.CharField(max_length=100, blank=True, default="")
+    # Every tool the agent called this turn, in order: [{"name": ..., "args": {...}}].
+    tool_calls = models.JSONField(default=list, blank=True)
+    # The full LangChain message sequence the agent produced this turn
+    # (tool-calling AIMessages, ToolMessages, final AIMessage), serialized
+    # with messages_to_dict. Replayed as history on later turns so the model
+    # still sees what its tools returned, not just its final text.
+    turn_messages = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

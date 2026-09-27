@@ -1,7 +1,17 @@
+import datetime
+from zoneinfo import ZoneInfo
+
 from django.conf import settings
+from django.utils import timezone
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    messages_from_dict,
+    messages_to_dict,
+)
 
 from .tools import TOOLS
 
@@ -17,6 +27,42 @@ Use your tools when the guest wants to see the menu, book a table, or check \
 an existing reservation. For anything else (hours, location, general \
 questions, small talk), just answer directly. Keep replies short and \
 friendly, like a real host would speak."""
+
+
+def _now() -> datetime.datetime:
+    """The current time in the restaurant's own time zone.
+
+    Its own function so tests (and evals) can pin "now" with a patch.
+    """
+    return timezone.now().astimezone(ZoneInfo(settings.RESTAURANT_TIME_ZONE))
+
+
+def build_system_prompt(now: datetime.datetime) -> str:
+    """SYSTEM_PROMPT plus the current date and time.
+
+    Without this the model has no idea what day it is, so "tomorrow" or
+    "this Friday" get resolved against whatever date it guesses - usually
+    one from its training data. Day-of-week is included too, since that's
+    how guests talk ("next Tuesday") and how our hours are written.
+    """
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Right now it is {now:%A, %B %-d, %Y, %H:%M} restaurant time "
+        f"(today's date is {now:%Y-%m-%d}). Use this to turn relative dates "
+        f'like "tonight", "tomorrow", or "next Friday" into exact dates.'
+    )
+
+
+@dynamic_prompt
+def _system_prompt_with_current_time(request: ModelRequest) -> str:
+    """Middleware that rebuilds the system prompt on every model call.
+
+    A plain `system_prompt=` string is fixed when the agent is built - and
+    the agent is built once per process - so it would freeze the date at
+    server start. dynamic_prompt runs just before each model call instead.
+    """
+    return build_system_prompt(_now())
+
 
 _agent = None
 
@@ -35,42 +81,61 @@ def _get_agent():
             model=settings.ANTHROPIC_MODEL,
             api_key=settings.ANTHROPIC_API_KEY,
         )
-        _agent = create_agent(model=llm, tools=TOOLS, system_prompt=SYSTEM_PROMPT)
+        _agent = create_agent(
+            model=llm,
+            tools=TOOLS,
+            middleware=[_system_prompt_with_current_time],
+        )
     return _agent
 
 
-def _extract_reply_text(output) -> str:
-    """Normalize the agent's final message content to plain text.
-
-    Claude Opus 5 thinks by default, so a turn's final AIMessage often has
-    non-string content: a list of blocks (thinking, text, ...) instead of a
-    single string.
-    """
-    if isinstance(output, str):
-        return output
-    parts = []
-    for block in output:
-        if isinstance(block, dict) and block.get("type") == "text":
-            parts.append(block["text"])
-    return "".join(parts)
-
-
 def _history_to_messages(messages):
+    """Rebuild the LangChain message list from persisted Message rows.
+
+    Assistant rows saved with turn_messages are replayed in full - including
+    the AIMessage that requested each tool and the ToolMessage holding its
+    result - so on a follow-up like "book the second one" the model can
+    still see the menu list_menu returned last turn. Rows from before
+    turn_messages existed fall back to just their final text.
+    """
     history = []
     for msg in messages:
         if msg.role == "user":
             history.append(HumanMessage(content=msg.content))
+        elif msg.turn_messages:
+            history.extend(messages_from_dict(msg.turn_messages))
         else:
             history.append(AIMessage(content=msg.content))
     return history
 
 
+def _summarize_turn(new_messages) -> dict:
+    """Turn the messages the agent appended this turn into what we persist.
+
+    Shared by run_agent and stream_agent_reply so both paths agree on what
+    "the reply" and "the tools used" were for a given turn.
+    """
+    tool_calls = [
+        {"name": call["name"], "args": call["args"]}
+        for msg in new_messages
+        for call in getattr(msg, "tool_calls", None) or []
+    ]
+    return {
+        # Claude Opus 5 thinks by default, so content is often a block list
+        # (thinking, text, ...) rather than a string - .text keeps only the
+        # text blocks.
+        "reply": new_messages[-1].text,
+        "tool_calls": tool_calls,
+        "turn_messages": messages_to_dict(new_messages),
+    }
+
+
 def run_agent(user_input: str, prior_messages) -> dict:
     """Run the LangChain agent for one turn.
 
-    Returns a dict with the assistant's reply text, the name of the tool it
-    invoked (empty string if it answered directly), and the input passed to
-    that tool (empty dict if none).
+    Returns a dict with the assistant's reply text, every tool it called
+    (`[{"name", "args"}]`, empty if it answered directly), and the turn's
+    full serialized message sequence for the caller to persist.
     """
     agent = _get_agent()
     input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
@@ -80,39 +145,7 @@ def run_agent(user_input: str, prior_messages) -> dict:
     # Everything at or after this index is new this turn - input_messages is
     # itself a prefix of result["messages"], since create_agent appends
     # rather than replacing.
-    new_messages = result["messages"][len(input_messages):]
-
-    tool_used = ""
-    tool_input = {}
-    for msg in new_messages:
-        if getattr(msg, "tool_calls", None):
-            first_call = msg.tool_calls[0]
-            tool_used = first_call["name"]
-            tool_input = first_call["args"]
-            break
-
-    reply = _extract_reply_text(result["messages"][-1].content)
-
-    return {"reply": reply, "tool_used": tool_used, "tool_input": tool_input}
-
-
-def _text_from_chunk_content(content) -> str:
-    """Pull visible text out of one streamed AIMessageChunk's `.content`.
-
-    Anthropic streams content as a list of typed blocks (text, tool_use,
-    and - when the model thinks - thinking), so this filters to `text`
-    blocks only. That also protects against ever streaming a thinking
-    block's contents to the client.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
-    return ""
+    return _summarize_turn(result["messages"][len(input_messages):])
 
 
 async def stream_agent_reply(user_input: str, prior_messages):
@@ -120,7 +153,7 @@ async def stream_agent_reply(user_input: str, prior_messages):
 
     Yields dicts of the form {"type": "token" | "tool_start" | "done", ...}.
     A "done" event is always yielded last, with the same shape run_agent
-    returns (reply/tool_used/tool_input), for the caller to persist.
+    returns (reply/tool_calls/turn_messages), for the caller to persist.
 
     Every generated token is streamed live as it arrives, including a "let
     me check that for you" preamble the model writes before deciding to call
@@ -128,47 +161,41 @@ async def stream_agent_reply(user_input: str, prior_messages):
     so this doesn't try to guess in advance whether the current turn will
     end up calling a tool.
 
-    What DOES get filtered is the *persisted* reply (the "done" event, and
-    what the caller saves to the DB): only text from a model call whose
-    final message has no tool_calls counts as the model's actual answer -
-    which is decided retroactively at on_chat_model_end, matching what
-    run_agent's last message would have contained. A tool-decision preamble
-    is real-time flavor text, not part of the answer, and dropping it here
-    keeps the streamed and non-streamed code paths agreeing on what "the
-    reply" was for a given turn.
+    The *persisted* reply is decided at the end instead, from the graph's
+    final state: the root run's on_chain_end event carries the same
+    messages list agent.invoke() would have returned, so it goes through
+    the same _summarize_turn as run_agent. The reply is therefore only the
+    final AIMessage's text - a tool-decision preamble is real-time flavor
+    text, not part of the answer (though it is kept in turn_messages, since
+    it's part of what the model actually said).
     """
     agent = _get_agent()
     input_messages = [*_history_to_messages(prior_messages), HumanMessage(content=user_input)]
 
-    tool_used = ""
-    tool_input = {}
-    turn_buffer = []
-    final_reply_parts = []
+    final_state = None
 
     async for event in agent.astream_events({"messages": input_messages}, version="v2"):
         kind = event["event"]
 
-        if kind == "on_chat_model_start":
-            turn_buffer = []
-
-        elif kind == "on_chat_model_stream":
-            text = _text_from_chunk_content(event["data"]["chunk"].content)
+        if kind == "on_chat_model_stream":
+            # .text keeps only text blocks, so thinking and tool_use deltas
+            # never reach the client.
+            text = event["data"]["chunk"].text
             if text:
-                turn_buffer.append(text)
                 yield {"type": "token", "text": text}
 
-        elif kind == "on_chat_model_end":
-            if not event["data"]["output"].tool_calls:
-                final_reply_parts.extend(turn_buffer)
-
         elif kind == "on_tool_start":
-            tool_used = event["name"]
-            tool_input = event["data"].get("input", {})
-            yield {"type": "tool_start", "tool": tool_used}
+            yield {"type": "tool_start", "tool": event["name"]}
+
+        elif kind == "on_chain_end" and not event["parent_ids"]:
+            # No parent means this is the whole agent graph finishing, not
+            # one of its nodes - its output is the final agent state.
+            final_state = event["data"]["output"]
+
+    if final_state is None:
+        raise RuntimeError("Agent stream ended without a final state")
 
     yield {
         "type": "done",
-        "reply": "".join(final_reply_parts),
-        "tool_used": tool_used,
-        "tool_input": tool_input,
+        **_summarize_turn(final_state["messages"][len(input_messages):]),
     }
